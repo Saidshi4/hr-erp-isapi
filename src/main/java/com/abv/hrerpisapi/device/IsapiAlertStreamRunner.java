@@ -24,6 +24,8 @@ public final class IsapiAlertStreamRunner implements Runnable {
     private static final int DEFAULT_PORT = 80;
     private static final int MAX_DISCONNECT_BACKOFF_SECONDS = 60;
     private static final int PROCESS_STOP_TIMEOUT_SECONDS = 2;
+    private static final int CURL_CONNECT_TIMEOUT_SECONDS = 5;
+    private static final int CURL_MAX_TIME_SECONDS = 30;
     private static final Pattern XML_TAG_PATTERN_TEMPLATE =
             Pattern.compile("<%s(?:\\s[^>]*)?>(.*?)</%s>", Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
 
@@ -133,6 +135,8 @@ public final class IsapiAlertStreamRunner implements Runnable {
         Process p = new ProcessBuilder(
                 "curl",
                 "-N",
+                "--connect-timeout", String.valueOf(CURL_CONNECT_TIMEOUT_SECONDS),
+                "--max-time", String.valueOf(CURL_MAX_TIME_SECONDS),
                 "--digest",
                 "-u", device.getUsername() + ":" + device.getPassword(),
                 "-H", "Accept: multipart/x-mixed-replace",
@@ -151,10 +155,12 @@ public final class IsapiAlertStreamRunner implements Runnable {
 
         try (BufferedInputStream in = new BufferedInputStream(raw)) {
             while (true) {
+                ensureNotInterrupted();
                 int contentLength = readHeadersAndGetContentLength(in);
                 if (contentLength <= 0) continue;
 
                 byte[] body = readFully(in, contentLength);
+                ensureNotInterrupted();
                 skipOptionalCrlf(in);
 
                 int first = firstNonWhitespaceByte(body);
@@ -197,10 +203,11 @@ public final class IsapiAlertStreamRunner implements Runnable {
     // Multipart parsing helpers
     // -----------------------------------------------------------------------
 
-    private static int readHeadersAndGetContentLength(InputStream in) throws IOException {
+    private static int readHeadersAndGetContentLength(InputStream in) throws IOException, InterruptedException {
         int contentLength = -1;
 
         while (true) {
+            ensureNotInterrupted();
             String line = readAsciiLine(in);
             if (line == null) throw new EOFException("Stream ended");
 
@@ -222,10 +229,11 @@ public final class IsapiAlertStreamRunner implements Runnable {
         }
     }
 
-    private static byte[] readFully(InputStream in, int n) throws IOException {
+    private static byte[] readFully(InputStream in, int n) throws IOException, InterruptedException {
         byte[] buf = new byte[n];
         int off = 0;
         while (off < n) {
+            ensureNotInterrupted();
             int r = in.read(buf, off, n - off);
             if (r < 0) throw new EOFException("Unexpected end of stream while reading body");
             off += r;
@@ -249,9 +257,10 @@ public final class IsapiAlertStreamRunner implements Runnable {
         return -1;
     }
 
-    private static String readAsciiLine(InputStream in) throws IOException {
+    private static String readAsciiLine(InputStream in) throws IOException, InterruptedException {
         ByteArrayOutputStream baos = new ByteArrayOutputStream(128);
         while (true) {
+            ensureNotInterrupted();
             int ch = in.read();
             if (ch < 0) {
                 if (baos.size() == 0) return null;
@@ -261,6 +270,12 @@ public final class IsapiAlertStreamRunner implements Runnable {
             if (ch != '\r') baos.write(ch);
         }
         return baos.toString(StandardCharsets.US_ASCII);
+    }
+
+    private static void ensureNotInterrupted() throws InterruptedException {
+        if (Thread.currentThread().isInterrupted()) {
+            throw new InterruptedException("Alert stream thread interrupted");
+        }
     }
 
     static ResponseStatusDetails parseResponseStatusXml(String xml) {
