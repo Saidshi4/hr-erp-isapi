@@ -4,6 +4,7 @@ import com.abv.hrerpisapi.dao.entity.DeviceEntity;
 import com.abv.hrerpisapi.device.mapper.IsapiEventMapper;
 import com.abv.hrerpisapi.device.model.ParsedAcsEvent;
 import com.abv.hrerpisapi.service.AcsIngestService;
+import lombok.extern.slf4j.Slf4j;
 
 import java.io.*;
 import java.nio.charset.StandardCharsets;
@@ -13,6 +14,7 @@ import java.nio.charset.StandardCharsets;
  * into {@link AcsIngestService}.  Runs on its own daemon thread managed by
  * {@link com.abv.hrerpisapi.service.DeviceWorkerService}.
  */
+@Slf4j
 public final class IsapiAlertStreamRunner implements Runnable {
 
     private final DeviceEntity device;
@@ -39,8 +41,8 @@ public final class IsapiAlertStreamRunner implements Runnable {
                 Thread.currentThread().interrupt();
                 return;
             } catch (Exception e) {
-                System.err.printf("alertStream[device=%d] crashed, retry in %ds: %s%n",
-                        device.getId(), backoffSeconds, e.getMessage());
+                log.warn("alertStream crashed for device {} retry in {}s: {}",
+                        device.getId(), backoffSeconds, e.getMessage(), e);
                 try {
                     Thread.sleep(backoffSeconds * 1000L);
                 } catch (InterruptedException ex) {
@@ -85,8 +87,8 @@ public final class IsapiAlertStreamRunner implements Runnable {
                 try {
                     handleJson(json);
                 } catch (Exception parseEx) {
-                    System.err.printf("alertStream[device=%d] parse error, skipping part: %s%n",
-                            device.getId(), parseEx.getMessage());
+                    log.warn("alertStream parse error for device {} skipping part: {}",
+                            device.getId(), parseEx.getMessage(), parseEx);
                 }
             }
         } finally {
