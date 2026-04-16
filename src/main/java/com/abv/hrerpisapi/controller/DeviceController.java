@@ -5,6 +5,7 @@ import com.abv.hrerpisapi.dao.repository.DeviceRepository;
 import com.abv.hrerpisapi.device.client.IsapiClient;
 import com.abv.hrerpisapi.service.DeviceWorkerService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
@@ -12,6 +13,7 @@ import org.springframework.web.server.ResponseStatusException;
 import java.util.List;
 
 @RestController
+@Slf4j
 @RequestMapping("/api/devices")
 @RequiredArgsConstructor
 public class DeviceController {
@@ -36,17 +38,20 @@ public class DeviceController {
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     public DeviceResponse create(@RequestBody DeviceUpsertRequest request) {
+        log.info("ActionLog.device.create.started ip={} enabled={}", trimToNull(request.ip()), request.enabled());
         DeviceEntity device = new DeviceEntity();
         applyUpsert(device, request, true);
         DeviceEntity saved = deviceRepository.save(device);
         if (saved.isEnabled()) {
             deviceWorkerService.startDevice(saved);
         }
+        log.info("ActionLog.device.create.ended deviceId={} ip={} enabled={}", saved.getId(), saved.getIp(), saved.isEnabled());
         return toResponse(saved);
     }
 
     @PutMapping("/{id}")
     public DeviceResponse update(@PathVariable Long id, @RequestBody DeviceUpsertRequest request) {
+        log.info("ActionLog.device.update.started deviceId={} ip={} enabled={}", id, trimToNull(request.ip()), request.enabled());
         DeviceEntity device = requireDevice(id);
         applyUpsert(device, request, false);
         DeviceEntity saved = deviceRepository.save(device);
@@ -55,11 +60,13 @@ public class DeviceController {
         } else {
             deviceWorkerService.stopDevice(saved.getId());
         }
+        log.info("ActionLog.device.update.ended deviceId={} ip={} enabled={}", saved.getId(), saved.getIp(), saved.isEnabled());
         return toResponse(saved);
     }
 
     @PatchMapping("/{id}/enabled")
     public DeviceResponse updateEnabled(@PathVariable Long id, @RequestBody DeviceEnabledRequest request) {
+        log.info("ActionLog.device.enabled.update.started deviceId={} enabled={}", id, request.enabled());
         DeviceEntity device = requireDevice(id);
         device.setEnabled(request.enabled());
         DeviceEntity saved = deviceRepository.save(device);
@@ -68,46 +75,59 @@ public class DeviceController {
         } else {
             deviceWorkerService.stopDevice(saved.getId());
         }
+        log.info("ActionLog.device.enabled.update.ended deviceId={} enabled={}", saved.getId(), saved.isEnabled());
         return toResponse(saved);
     }
 
     @DeleteMapping("/{id}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void delete(@PathVariable Long id) {
+        log.info("ActionLog.device.delete.started deviceId={}", id);
         DeviceEntity device = requireDevice(id);
         deviceWorkerService.stopDevice(device.getId());
         deviceRepository.delete(device);
+        log.info("ActionLog.device.delete.ended deviceId={}", id);
     }
 
     @PostMapping("/{id}/start")
     public DeviceRuntimeResponse start(@PathVariable Long id) {
+        log.info("ActionLog.device.alertStream.start.started deviceId={}", id);
         DeviceEntity device = requireDevice(id);
         deviceWorkerService.startDevice(device);
-        return new DeviceRuntimeResponse(
+        DeviceRuntimeResponse response = new DeviceRuntimeResponse(
                 device.getId(),
                 device.isEnabled(),
                 deviceWorkerService.isRunning(device.getId()));
+        log.info("ActionLog.device.alertStream.start.ended deviceId={} running={}", response.id(), response.running());
+        return response;
     }
 
     @PostMapping("/{id}/stop")
     public DeviceRuntimeResponse stop(@PathVariable Long id) {
+        log.info("ActionLog.device.alertStream.stop.started deviceId={}", id);
         DeviceEntity device = requireDevice(id);
         deviceWorkerService.stopDevice(device.getId());
-        return new DeviceRuntimeResponse(
+        DeviceRuntimeResponse response = new DeviceRuntimeResponse(
                 device.getId(),
                 device.isEnabled(),
                 deviceWorkerService.isRunning(device.getId()));
+        log.info("ActionLog.device.alertStream.stop.ended deviceId={} running={}", response.id(), response.running());
+        return response;
     }
 
     @GetMapping("/{id}/status")
     public DeviceStatusResponse status(@PathVariable Long id) {
         DeviceEntity device = requireDevice(id);
+        log.info("ActionLog.device.status.check.started deviceId={} ip={}", device.getId(), device.getIp());
         IsapiClient.DeviceStatusCheckResult status = isapiClient.checkDeviceStatus(device);
-        return new DeviceStatusResponse(
+        DeviceStatusResponse response = new DeviceStatusResponse(
                 device.getId(),
                 status.online(),
                 status.statusCode(),
                 status.responseSnippet());
+        log.info("ActionLog.device.status.check.ended deviceId={} ip={} online={} statusCode={}",
+                device.getId(), device.getIp(), response.online(), response.statusCode());
+        return response;
     }
 
     private DeviceEntity requireDevice(Long id) {
