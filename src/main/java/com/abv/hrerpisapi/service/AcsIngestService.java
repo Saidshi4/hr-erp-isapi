@@ -104,7 +104,7 @@ public class AcsIngestService {
 
     private String buildIdentity(String employeeNo, ParsedAcsEvent event) {
         if (employeeNo != null && !employeeNo.isBlank()) return "E:" + employeeNo;
-        if (!event.cardNo().isBlank()) return "C:" + event.cardNo();
+        if (event.cardNo() != null && !event.cardNo().isBlank()) return "C:" + event.cardNo();
         return "U:" + event.serialNo();
     }
 }

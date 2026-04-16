@@ -1,6 +1,7 @@
 package com.abv.hrerpisapi.scheduler;
 
 import com.abv.hrerpisapi.dao.entity.DeviceCursorEntity;
+import com.abv.hrerpisapi.dao.entity.DeviceEntity;
 import com.abv.hrerpisapi.dao.repository.DeviceCursorRepository;
 import com.abv.hrerpisapi.dao.repository.DeviceRepository;
 import com.abv.hrerpisapi.device.client.IsapiClient;
@@ -37,8 +38,7 @@ public class AcsEventHistoryPoller {
     public void poll() {
         deviceRepository.findByEnabledTrue().forEach(device -> {
             try {
-                List<ParsedAcsEvent> events = fetchMissedEvents(device.getId(),
-                        device.getIp(), device);
+                List<ParsedAcsEvent> events = fetchMissedEvents(device);
                 if (!events.isEmpty()) {
                     log.info("HistoryPoller: device={} fetched {} missed event(s)",
                             device.getId(), events.size());
@@ -51,13 +51,10 @@ public class AcsEventHistoryPoller {
         });
     }
 
-    private List<ParsedAcsEvent> fetchMissedEvents(
-            Long deviceId,
-            String ip,
-            com.abv.hrerpisapi.dao.entity.DeviceEntity device)
+    private List<ParsedAcsEvent> fetchMissedEvents(DeviceEntity device)
             throws IOException, InterruptedException {
 
-        DeviceCursorEntity cursor = cursorRepository.findById(deviceId).orElse(null);
+        DeviceCursorEntity cursor = cursorRepository.findById(device.getId()).orElse(null);
 
         OffsetDateTime startTime = cursor != null && cursor.getLastEventTime() != null
                 ? cursor.getLastEventTime().minusMinutes(OVERLAP_MINUTES)
