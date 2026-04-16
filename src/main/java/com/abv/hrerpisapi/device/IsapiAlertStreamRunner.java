@@ -1,29 +1,30 @@
 package com.abv.hrerpisapi.device;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.abv.hrerpisapi.dao.entity.DeviceEntity;
+import com.abv.hrerpisapi.device.mapper.IsapiEventMapper;
+import com.abv.hrerpisapi.device.model.ParsedAcsEvent;
+import com.abv.hrerpisapi.service.AcsIngestService;
 
 import java.io.*;
 import java.nio.charset.StandardCharsets;
-import java.time.OffsetDateTime;
-import java.util.Set;
 
+/**
+ * Connects to a device's alertStream multipart endpoint and feeds events
+ * into {@link AcsIngestService}.  Runs on its own daemon thread managed by
+ * {@link com.abv.hrerpisapi.service.DeviceWorkerService}.
+ */
 public final class IsapiAlertStreamRunner implements Runnable {
-    private static final ObjectMapper om = new ObjectMapper();
 
-    private final String ip;
-    private final String username;
-    private final String password;
-    private final int deviceId;
+    private final DeviceEntity device;
+    private final AcsIngestService ingestService;
+    private final IsapiEventMapper eventMapper;
 
-    // MVP allowlist (sənin real cihazında təsdiqlənib)
-    private final Set<Integer> successMinors = Set.of(1, 75); // card=0x01, face=0x4B
-
-    public IsapiAlertStreamRunner(String ip, String username, String password, int deviceId) {
-        this.ip = ip;
-        this.username = username;
-        this.password = password;
-        this.deviceId = deviceId;
+    public IsapiAlertStreamRunner(DeviceEntity device,
+                                   AcsIngestService ingestService,
+                                   IsapiEventMapper eventMapper) {
+        this.device = device;
+        this.ingestService = ingestService;
+        this.eventMapper = eventMapper;
     }
 
     @Override
@@ -33,17 +34,18 @@ public final class IsapiAlertStreamRunner implements Runnable {
         while (!Thread.currentThread().isInterrupted()) {
             try {
                 runOnce();
-                // normal çıxsa (çox nadir), backoff reset
                 backoffSeconds = 3;
             } catch (InterruptedException ie) {
                 Thread.currentThread().interrupt();
                 return;
             } catch (Exception e) {
-                System.err.println("alertStream crashed, will retry in " + backoffSeconds + "s: " + e.getMessage());
+                System.err.printf("alertStream[device=%d] crashed, retry in %ds: %s%n",
+                        device.getId(), backoffSeconds, e.getMessage());
                 try {
-                    sleepSeconds(backoffSeconds);
+                    Thread.sleep(backoffSeconds * 1000L);
                 } catch (InterruptedException ex) {
-                    throw new RuntimeException(ex);
+                    Thread.currentThread().interrupt();
+                    return;
                 }
                 backoffSeconds = Math.min(backoffSeconds * 2, 60);
             }
@@ -51,14 +53,13 @@ public final class IsapiAlertStreamRunner implements Runnable {
     }
 
     private void runOnce() throws Exception {
-        String url = "http://" + ip + "/ISAPI/Event/notification/alertStream";
+        String url = "http://" + device.getIp() + "/ISAPI/Event/notification/alertStream";
 
-        // cmd.exe istifadə ETMƏ: encoding/quote problemləri yaradır
         Process p = new ProcessBuilder(
                 "curl",
                 "-N",
                 "--digest",
-                "-u", username + ":" + password,
+                "-u", device.getUsername() + ":" + device.getPassword(),
                 "-H", "Accept: multipart/x-mixed-replace",
                 url
         )
@@ -73,43 +74,36 @@ public final class IsapiAlertStreamRunner implements Runnable {
                 if (contentLength <= 0) continue;
 
                 byte[] body = readFully(in, contentLength);
-
-                // adətən part body-dən sonra CRLF gəlir
                 skipOptionalCrlf(in);
 
-                // JSON deyil isə sakitcə skip elə
                 int first = firstNonWhitespaceByte(body);
-                if (first < 0) continue; // boş body
+                if (first < 0) continue;
                 byte b = body[first];
-                if (b != '{' && b != '[') {
-                    continue;
-                }
+                if (b != '{' && b != '[') continue;
 
                 String json = new String(body, StandardCharsets.UTF_8).trim();
-
                 try {
                     handleJson(json);
                 } catch (Exception parseEx) {
-                    // stream-i öldürmürük, bir part-ı buraxırıq
-                    System.err.println("JSON parse failed, skipping one part: " + parseEx.getMessage());
-                    // debug üçün lazımdırsa aç:
-                    // System.err.println(json);
+                    System.err.printf("alertStream[device=%d] parse error, skipping part: %s%n",
+                            device.getId(), parseEx.getMessage());
                 }
             }
         } finally {
-            // prosesin özü də bəzən “öz-özünə” bağlanır; biz yenidən qoşulacağıq
             p.destroyForcibly();
         }
     }
 
-    private static void sleepSeconds(int seconds) throws InterruptedException {
-        Thread.sleep(seconds * 1000L);
+    private void handleJson(String json) throws Exception {
+        ParsedAcsEvent event = eventMapper.map(json);
+        if (event == null) return;
+        ingestService.ingest(device, event);
     }
 
-    /**
-     * Multipart part header-lərini oxuyur.
-     * Boundary sətrlərini və boş sətrləri keçir, Content-Length tapanda qaytarır.
-     */
+    // -----------------------------------------------------------------------
+    // Multipart parsing helpers
+    // -----------------------------------------------------------------------
+
     private static int readHeadersAndGetContentLength(InputStream in) throws IOException {
         int contentLength = -1;
 
@@ -119,21 +113,19 @@ public final class IsapiAlertStreamRunner implements Runnable {
 
             line = line.trim();
             if (line.isEmpty()) {
-                // header-lər bitdi (boş sətir)
                 if (contentLength > 0) return contentLength;
-                // boş sətir amma content-length yoxdursa -> boundary arası ola bilər, davam et
                 continue;
             }
 
-            // boundary: --MIME_boundary
             if (line.startsWith("--")) continue;
 
             if (line.regionMatches(true, 0, "Content-Length:", 0, "Content-Length:".length())) {
                 String v = line.substring("Content-Length:".length()).trim();
-                try { contentLength = Integer.parseInt(v); } catch (Exception ignore) {}
+                try {
+                    contentLength = Integer.parseInt(v);
+                } catch (NumberFormatException ignore) {
+                }
             }
-
-            // başqa header-lər (Content-Type və s.) ignore
         }
     }
 
@@ -164,9 +156,6 @@ public final class IsapiAlertStreamRunner implements Runnable {
         return -1;
     }
 
-    /**
-     * alertStream header-ləri ASCII-dir. \n-ə qədər oxuyuruq, \r-ni atırıq.
-     */
     private static String readAsciiLine(InputStream in) throws IOException {
         ByteArrayOutputStream baos = new ByteArrayOutputStream(128);
         while (true) {
@@ -179,42 +168,5 @@ public final class IsapiAlertStreamRunner implements Runnable {
             if (ch != '\r') baos.write(ch);
         }
         return baos.toString(StandardCharsets.US_ASCII);
-    }
-
-    private void handleJson(String json) throws Exception {
-        JsonNode root = om.readTree(json);
-        if (!"AccessControllerEvent".equals(root.path("eventType").asText())) return;
-
-        String dt = root.path("dateTime").asText(null);
-        OffsetDateTime time = dt == null ? null : OffsetDateTime.parse(dt);
-
-        JsonNode ace = root.get("AccessControllerEvent");
-        if (ace == null || ace.isNull()) return;
-
-        int major = ace.path("majorEventType").asInt(-1);
-        int minor = ace.path("subEventType").asInt(-1);
-        long serialNo = ace.path("serialNo").asLong(-1);
-
-        String employeeNo = ace.path("employeeNoString").asText("");
-        String cardNo = ace.path("cardNo").asText("");
-
-        String identity;
-        if (!employeeNo.isBlank()) identity = "E:" + employeeNo;
-        else if (!cardNo.isBlank()) identity = "C:" + cardNo;
-        else identity = "U:" + serialNo;
-
-        boolean success = (major == 5 && successMinors.contains(minor));
-
-        if (success) {
-            System.out.printf(
-                    "RAW saved: deviceId=%d t=%s major=%d(0x%x) minor=%d(0x%x) success=true identity=%s serialNo=%d%n",
-                    deviceId,
-                    time == null ? "" : time,
-                    major, major,
-                    minor, minor,
-                    identity,
-                    serialNo
-            );
-        }
     }
 }
