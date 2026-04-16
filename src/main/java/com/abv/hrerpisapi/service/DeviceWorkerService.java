@@ -79,7 +79,6 @@ public class DeviceWorkerService {
                 stopRunner(runner);
             }
             waitForThreadStop(t);
-            log.info("ActionLog.device.alertStream.stop.ended deviceId={}", deviceId);
         }
     }
 

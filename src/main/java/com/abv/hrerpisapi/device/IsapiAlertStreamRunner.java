@@ -9,6 +9,7 @@ import lombok.extern.slf4j.Slf4j;
 import java.io.*;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -40,6 +41,9 @@ public final class IsapiAlertStreamRunner implements Runnable {
     private volatile Process activeProcess;
     private volatile InputStream activeInputStream;
     private volatile InputStream activeErrorStream;
+    private final AtomicBoolean stopRequested = new AtomicBoolean(false);
+    private final AtomicBoolean stopLoopLogged = new AtomicBoolean(false);
+    private volatile Thread runnerThread;
 
     public IsapiAlertStreamRunner(DeviceEntity device,
                                    AcsIngestService ingestService,
@@ -55,83 +59,115 @@ public final class IsapiAlertStreamRunner implements Runnable {
 
     @Override
     public void run() {
+        runnerThread = Thread.currentThread();
         int backoffSeconds = disconnectBackoffBaseSeconds;
         String url = alertStreamUrl();
         int port = portFromUrl(url);
 
-        while (!Thread.currentThread().isInterrupted()) {
-            log.info("ActionLog.device.alertStream.connect.started deviceId={} ip={} port={} url={} retrySeconds={}",
-                    device.getId(), device.getIp(), port, url, backoffSeconds);
-            try {
-                runOnce();
-                backoffSeconds = disconnectBackoffBaseSeconds;
-            } catch (AlertStreamResponseException ex) {
-                int retrySeconds = ex.deployExceedMax()
-                        ? deployExceedMaxBackoffSeconds
-                        : backoffSeconds;
-                log.warn("ActionLog.device.alertStream.connect.failed deviceId={} ip={} port={} statusCode={} subStatusCode={} error={} retrySeconds={} hint={}",
-                        device.getId(),
-                        device.getIp(),
-                        port,
-                        ex.statusCode(),
-                        safe(ex.subStatusCode()),
-                        safe(ex.getMessage()),
-                        retrySeconds,
-                        ex.deployExceedMax()
-                                ? "device may have max subscriptions reached; restart/close stale sessions"
-                                : "-");
-                if (!sleepBackoff(retrySeconds)) {
+        try {
+            while (!isStopRequested()) {
+                log.info("ActionLog.device.alertStream.connect.started deviceId={} ip={} port={} url={} retrySeconds={}",
+                        device.getId(), device.getIp(), port, url, backoffSeconds);
+                try {
+                    runOnce();
+                    backoffSeconds = disconnectBackoffBaseSeconds;
+                } catch (AlertStreamResponseException ex) {
+                    if (isStopRequested()) {
+                        logStopLoopEnded("stop requested");
+                        return;
+                    }
+                    int retrySeconds = ex.deployExceedMax()
+                            ? deployExceedMaxBackoffSeconds
+                            : backoffSeconds;
+                    log.warn("ActionLog.device.alertStream.connect.failed deviceId={} ip={} port={} statusCode={} subStatusCode={} error={} retrySeconds={} hint={}",
+                            device.getId(),
+                            device.getIp(),
+                            port,
+                            ex.statusCode(),
+                            safe(ex.subStatusCode()),
+                            safe(ex.getMessage()),
+                            retrySeconds,
+                            ex.deployExceedMax()
+                                    ? "device may have max subscriptions reached; restart/close stale sessions"
+                                    : "-");
+                    if (!sleepBackoff(retrySeconds)) {
+                        logStopLoopEnded("stop requested during backoff");
+                        return;
+                    }
+                    backoffSeconds = ex.deployExceedMax()
+                            ? disconnectBackoffBaseSeconds
+                            : Math.min(backoffSeconds * 2, MAX_DISCONNECT_BACKOFF_SECONDS);
+                } catch (AlertStreamStoppedException stopped) {
+                    logStopLoopEnded(stopped.getMessage());
                     return;
-                }
-                backoffSeconds = ex.deployExceedMax()
-                        ? disconnectBackoffBaseSeconds
-                        : Math.min(backoffSeconds * 2, MAX_DISCONNECT_BACKOFF_SECONDS);
-            } catch (AlertStreamDisconnectedException disconnected) {
-                if (Thread.currentThread().isInterrupted()) {
-                    stop();
+                } catch (AlertStreamDisconnectedException disconnected) {
+                    if (isStopRequested()) {
+                        logStopLoopEnded("stop requested");
+                        return;
+                    }
+                    log.info("ActionLog.device.alertStream.disconnected deviceId={} ip={} port={} retrySeconds={} reason={} curlExitCode={} curlStderrTail={}",
+                            device.getId(),
+                            device.getIp(),
+                            port,
+                            backoffSeconds,
+                            safe(disconnected.getMessage()),
+                            disconnected.curlExitCode(),
+                            safe(disconnected.curlStderrTail()));
+                    if (!sleepBackoff(backoffSeconds)) {
+                        logStopLoopEnded("stop requested during backoff");
+                        return;
+                    }
+                    backoffSeconds = Math.min(backoffSeconds * 2, MAX_DISCONNECT_BACKOFF_SECONDS);
+                } catch (EOFException eof) {
+                    if (isStopRequested()) {
+                        logStopLoopEnded("stop requested");
+                        return;
+                    }
+                    log.info("ActionLog.device.alertStream.disconnected deviceId={} ip={} port={} retrySeconds={} reason={}",
+                            device.getId(), device.getIp(), port, backoffSeconds, safe(eof.getMessage()));
+                    if (!sleepBackoff(backoffSeconds)) {
+                        logStopLoopEnded("stop requested during backoff");
+                        return;
+                    }
+                    backoffSeconds = Math.min(backoffSeconds * 2, MAX_DISCONNECT_BACKOFF_SECONDS);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    logStopLoopEnded("thread interrupted");
                     return;
+                } catch (Exception e) {
+                    if (isStopRequested()) {
+                        logStopLoopEnded("stop requested");
+                        return;
+                    }
+                    log.warn("ActionLog.device.alertStream.connect.failed deviceId={} ip={} port={} statusCode={} subStatusCode={} error={} retrySeconds={}",
+                            device.getId(), device.getIp(), port, "-", "-", safe(e.getMessage()), backoffSeconds, e);
+                    if (!sleepBackoff(backoffSeconds)) {
+                        logStopLoopEnded("stop requested during backoff");
+                        return;
+                    }
+                    backoffSeconds = Math.min(backoffSeconds * 2, MAX_DISCONNECT_BACKOFF_SECONDS);
                 }
-                log.info("ActionLog.device.alertStream.disconnected deviceId={} ip={} port={} retrySeconds={} reason={} curlExitCode={} curlStderrTail={}",
-                        device.getId(),
-                        device.getIp(),
-                        port,
-                        backoffSeconds,
-                        safe(disconnected.getMessage()),
-                        disconnected.curlExitCode(),
-                        safe(disconnected.curlStderrTail()));
-                if (!sleepBackoff(backoffSeconds)) {
-                    return;
-                }
-                backoffSeconds = Math.min(backoffSeconds * 2, MAX_DISCONNECT_BACKOFF_SECONDS);
-            } catch (EOFException eof) {
-                if (Thread.currentThread().isInterrupted()) {
-                    stop();
-                    return;
-                }
-                log.info("ActionLog.device.alertStream.disconnected deviceId={} ip={} port={} retrySeconds={} reason={}",
-                        device.getId(), device.getIp(), port, backoffSeconds, safe(eof.getMessage()));
-                if (!sleepBackoff(backoffSeconds)) {
-                    return;
-                }
-                backoffSeconds = Math.min(backoffSeconds * 2, MAX_DISCONNECT_BACKOFF_SECONDS);
-            } catch (InterruptedException ie) {
-                Thread.currentThread().interrupt();
-                stop();
-                return;
-            } catch (Exception e) {
-                log.warn("ActionLog.device.alertStream.connect.failed deviceId={} ip={} port={} statusCode={} subStatusCode={} error={} retrySeconds={}",
-                        device.getId(), device.getIp(), port, "-", "-", safe(e.getMessage()), backoffSeconds, e);
-                if (!sleepBackoff(backoffSeconds)) {
-                    return;
-                }
-                backoffSeconds = Math.min(backoffSeconds * 2, MAX_DISCONNECT_BACKOFF_SECONDS);
             }
+            logStopLoopEnded("stop requested");
+            requestStop();
+        } finally {
+            runnerThread = null;
         }
-        stop();
     }
 
     public void stop() {
-        log.info("ActionLog.device.alertStream.stop.started deviceId={} ip={}", device.getId(), device.getIp());
+        if (!stopRequested.compareAndSet(false, true)) {
+            return;
+        }
+        log.info("ActionLog.device.alertStream.stop.requested deviceId={} ip={}", device.getId(), device.getIp());
+        Thread thread = runnerThread;
+        if (thread != null && thread != Thread.currentThread()) {
+            thread.interrupt();
+        }
+        requestStop();
+    }
+
+    private void requestStop() {
         Process process;
         InputStream inputStream;
         InputStream errorStream;
@@ -144,7 +180,6 @@ public final class IsapiAlertStreamRunner implements Runnable {
             activeErrorStream = null;
         }
         cleanupProcess(process, inputStream, errorStream);
-        log.info("ActionLog.device.alertStream.stop.ended deviceId={} ip={}", device.getId(), device.getIp());
     }
 
     private void runOnce() throws Exception {
@@ -210,6 +245,11 @@ public final class IsapiAlertStreamRunner implements Runnable {
                     eof.getMessage(),
                     processEndDetails.exitCode(),
                     processEndDetails.stderrTail());
+        } catch (IOException ioException) {
+            if (isStopRequested()) {
+                throw new AlertStreamStoppedException("stream closed due to stop request");
+            }
+            throw ioException;
         } finally {
             synchronized (processLock) {
                 activeProcess = null;
@@ -302,6 +342,17 @@ public final class IsapiAlertStreamRunner implements Runnable {
     private static void ensureNotInterrupted() throws InterruptedException {
         if (Thread.currentThread().isInterrupted()) {
             throw new InterruptedException("Alert stream thread interrupted");
+        }
+    }
+
+    private boolean isStopRequested() {
+        return stopRequested.get() || Thread.currentThread().isInterrupted();
+    }
+
+    private void logStopLoopEnded(String reason) {
+        if (stopLoopLogged.compareAndSet(false, true)) {
+            log.info("ActionLog.device.alertStream.stop.loop.ended deviceId={} ip={} reason={}",
+                    device.getId(), device.getIp(), safe(reason));
         }
     }
 
@@ -456,7 +507,6 @@ public final class IsapiAlertStreamRunner implements Runnable {
             return true;
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
-            stop();
             return false;
         }
     }
@@ -525,6 +575,12 @@ public final class IsapiAlertStreamRunner implements Runnable {
 
         String curlStderrTail() {
             return curlStderrTail;
+        }
+    }
+
+    private static final class AlertStreamStoppedException extends Exception {
+        private AlertStreamStoppedException(String message) {
+            super(message);
         }
     }
 }

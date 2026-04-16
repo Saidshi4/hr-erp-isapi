@@ -7,6 +7,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.lang.reflect.Field;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -61,7 +62,7 @@ class IsapiAlertStreamRunnerTest {
 
         assertTrue(input.closed);
         assertTrue(error.closed);
-        assertTrue(process.destroyCalled);
+        assertEquals(1, process.destroyCalledCount);
         assertTrue(process.destroyForciblyCalled);
     }
 
@@ -123,6 +124,40 @@ class IsapiAlertStreamRunnerTest {
         assertEquals("-", details.stderrTail());
     }
 
+    @Test
+    void stopShouldBeIdempotentAndCleanupOnlyOnce() throws Exception {
+        IsapiAlertStreamRunner runner = new IsapiAlertStreamRunner(device(1L), null, null, 3, 300);
+        TrackableInputStream input = new TrackableInputStream();
+        TrackableInputStream error = new TrackableInputStream();
+        StubProcess process = new StubProcess(true, 0);
+
+        setField(runner, "activeProcess", process);
+        setField(runner, "activeInputStream", input);
+        setField(runner, "activeErrorStream", error);
+
+        runner.stop();
+        runner.stop();
+
+        assertTrue(input.closed);
+        assertTrue(error.closed);
+        assertEquals(1, process.destroyCalledCount);
+    }
+
+    private static void setField(Object target, String name, Object value) throws Exception {
+        Field field = target.getClass().getDeclaredField(name);
+        field.setAccessible(true);
+        field.set(target, value);
+    }
+
+    private static com.abv.hrerpisapi.dao.entity.DeviceEntity device(Long id) {
+        com.abv.hrerpisapi.dao.entity.DeviceEntity d = new com.abv.hrerpisapi.dao.entity.DeviceEntity();
+        d.setId(id);
+        d.setIp("10.0.0.1");
+        d.setUsername("admin");
+        d.setPassword("secret");
+        return d;
+    }
+
     private static final class TrackableInputStream extends ByteArrayInputStream {
         private boolean closed;
 
@@ -139,7 +174,7 @@ class IsapiAlertStreamRunnerTest {
     private static final class StubProcess extends Process {
         private final boolean exitsWithinTimeout;
         private final int exitCode;
-        private boolean destroyCalled;
+        private int destroyCalledCount;
         private boolean destroyForciblyCalled;
 
         private StubProcess(boolean exitsWithinTimeout) {
@@ -183,7 +218,7 @@ class IsapiAlertStreamRunnerTest {
 
         @Override
         public void destroy() {
-            destroyCalled = true;
+            destroyCalledCount++;
         }
 
         @Override
