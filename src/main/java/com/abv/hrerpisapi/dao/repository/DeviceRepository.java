@@ -8,4 +8,6 @@ import java.util.List;
 public interface DeviceRepository extends JpaRepository<DeviceEntity, Long> {
 
     List<DeviceEntity> findByEnabledTrue();
+
+    List<DeviceEntity> findByEnabled(boolean enabled);
 }

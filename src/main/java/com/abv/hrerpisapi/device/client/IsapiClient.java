@@ -113,6 +113,20 @@ public class IsapiClient {
         return result;
     }
 
+    public DeviceStatusCheckResult checkDeviceStatus(DeviceEntity device) {
+        try {
+            HttpResponse<String> resp = clientFor(device).get("/ISAPI/System/deviceInfo?format=json");
+            return new DeviceStatusCheckResult(
+                    resp.statusCode() == 200,
+                    resp.statusCode(),
+                    snippet(resp.body()));
+        } catch (Exception e) {
+            log.info("Device status check failed for device {} ({}): {}", device.getId(), device.getIp(), e.getMessage());
+            log.debug("Device status check exception for device {}", device.getId(), e);
+            return new DeviceStatusCheckResult(false, -1, snippet(e.getMessage()));
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Private helpers
     // -----------------------------------------------------------------------
@@ -148,6 +162,24 @@ public class IsapiClient {
                 "http://" + device.getIp(),
                 device.getUsername(),
                 device.getPassword());
+    }
+
+    private String snippet(String raw) {
+        if (raw == null) {
+            return "";
+        }
+        String normalized = raw.replace("\n", " ").replace("\r", " ").trim();
+        int max = 300;
+        return normalized.length() <= max
+                ? normalized
+                : normalized.substring(0, max) + "...";
+    }
+
+    public record DeviceStatusCheckResult(
+            boolean online,
+            int statusCode,
+            String responseSnippet
+    ) {
     }
 
     public static class AcsEventHistoryNotSupportedException extends RuntimeException {
