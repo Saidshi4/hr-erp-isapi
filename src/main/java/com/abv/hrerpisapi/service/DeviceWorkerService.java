@@ -22,6 +22,7 @@ import java.util.concurrent.ConcurrentHashMap;
 @Service
 @RequiredArgsConstructor
 public class DeviceWorkerService {
+    private static final long THREAD_STOP_WAIT_MILLIS = 3000L;
 
     private final DeviceRepository deviceRepository;
     private final AcsIngestService acsIngestService;
@@ -73,11 +74,33 @@ public class DeviceWorkerService {
         Thread t = activeThreads.remove(deviceId);
         IsapiAlertStreamRunner runner = activeRunners.remove(deviceId);
         if (t != null) {
+            interruptThread(t);
             if (runner != null) {
-                runner.stop();
+                stopRunner(runner);
             }
-            t.interrupt();
+            waitForThreadStop(t);
             log.info("ActionLog.device.alertStream.stop.ended deviceId={}", deviceId);
+        }
+    }
+
+    protected void interruptThread(Thread thread) {
+        thread.interrupt();
+    }
+
+    protected void stopRunner(IsapiAlertStreamRunner runner) {
+        runner.stop();
+    }
+
+    protected void waitForThreadStop(Thread thread) {
+        try {
+            thread.join(THREAD_STOP_WAIT_MILLIS);
+            if (thread.isAlive()) {
+                log.warn("ActionLog.device.alertStream.stop.wait.timeout threadName={} waitMillis={}",
+                        thread.getName(), THREAD_STOP_WAIT_MILLIS);
+            }
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            log.warn("ActionLog.device.alertStream.stop.wait.interrupted threadName={}", thread.getName());
         }
     }
 

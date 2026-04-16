@@ -5,6 +5,8 @@ import org.junit.jupiter.api.Test;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -61,6 +63,34 @@ class IsapiAlertStreamRunnerTest {
         assertTrue(error.closed);
         assertTrue(process.destroyCalled);
         assertTrue(process.destroyForciblyCalled);
+    }
+
+    @Test
+    void readAsciiLineShouldThrowInterruptedExceptionWhenThreadIsInterrupted() throws Exception {
+        Method readAsciiLine = IsapiAlertStreamRunner.class.getDeclaredMethod("readAsciiLine", InputStream.class);
+        readAsciiLine.setAccessible(true);
+        Thread.currentThread().interrupt();
+        try {
+            InvocationTargetException ex = assertThrows(InvocationTargetException.class,
+                    () -> readAsciiLine.invoke(null, new ByteArrayInputStream("line\n".getBytes())));
+            assertInstanceOf(InterruptedException.class, ex.getCause());
+        } finally {
+            Thread.interrupted();
+        }
+    }
+
+    @Test
+    void readFullyShouldThrowInterruptedExceptionWhenThreadIsInterrupted() throws Exception {
+        Method readFully = IsapiAlertStreamRunner.class.getDeclaredMethod("readFully", InputStream.class, int.class);
+        readFully.setAccessible(true);
+        Thread.currentThread().interrupt();
+        try {
+            InvocationTargetException ex = assertThrows(InvocationTargetException.class,
+                    () -> readFully.invoke(null, new ByteArrayInputStream("abc".getBytes()), 3));
+            assertInstanceOf(InterruptedException.class, ex.getCause());
+        } finally {
+            Thread.interrupted();
+        }
     }
 
     private static final class TrackableInputStream extends ByteArrayInputStream {
