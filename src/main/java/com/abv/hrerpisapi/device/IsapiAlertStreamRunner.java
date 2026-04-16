@@ -25,7 +25,8 @@ public final class IsapiAlertStreamRunner implements Runnable {
     private static final int MAX_DISCONNECT_BACKOFF_SECONDS = 60;
     private static final int PROCESS_STOP_TIMEOUT_SECONDS = 2;
     private static final int CURL_CONNECT_TIMEOUT_SECONDS = 5;
-    private static final int CURL_MAX_TIME_SECONDS = 30;
+    private static final int CURL_PROCESS_EXIT_WAIT_MILLIS = 200;
+    private static final int CURL_STDERR_TAIL_MAX_CHARS = 400;
     private static final Pattern XML_TAG_PATTERN_TEMPLATE =
             Pattern.compile("<%s(?:\\s[^>]*)?>(.*?)</%s>", Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
 
@@ -85,6 +86,23 @@ public final class IsapiAlertStreamRunner implements Runnable {
                 backoffSeconds = ex.deployExceedMax()
                         ? disconnectBackoffBaseSeconds
                         : Math.min(backoffSeconds * 2, MAX_DISCONNECT_BACKOFF_SECONDS);
+            } catch (AlertStreamDisconnectedException disconnected) {
+                if (Thread.currentThread().isInterrupted()) {
+                    stop();
+                    return;
+                }
+                log.info("ActionLog.device.alertStream.disconnected deviceId={} ip={} port={} retrySeconds={} reason={} curlExitCode={} curlStderrTail={}",
+                        device.getId(),
+                        device.getIp(),
+                        port,
+                        backoffSeconds,
+                        safe(disconnected.getMessage()),
+                        disconnected.curlExitCode(),
+                        safe(disconnected.curlStderrTail()));
+                if (!sleepBackoff(backoffSeconds)) {
+                    return;
+                }
+                backoffSeconds = Math.min(backoffSeconds * 2, MAX_DISCONNECT_BACKOFF_SECONDS);
             } catch (EOFException eof) {
                 if (Thread.currentThread().isInterrupted()) {
                     stop();
@@ -136,7 +154,6 @@ public final class IsapiAlertStreamRunner implements Runnable {
                 "curl",
                 "-N",
                 "--connect-timeout", String.valueOf(CURL_CONNECT_TIMEOUT_SECONDS),
-                "--max-time", String.valueOf(CURL_MAX_TIME_SECONDS),
                 "--digest",
                 "-u", device.getUsername() + ":" + device.getPassword(),
                 "-H", "Accept: multipart/x-mixed-replace",
@@ -183,6 +200,16 @@ public final class IsapiAlertStreamRunner implements Runnable {
                             device.getId(), device.getIp(), safe(parseEx.getMessage()), parseEx);
                 }
             }
+        } catch (EOFException eof) {
+            CurlProcessEndDetails processEndDetails = captureCurlProcessEndDetails(
+                    p,
+                    error,
+                    device.getUsername(),
+                    device.getPassword());
+            throw new AlertStreamDisconnectedException(
+                    eof.getMessage(),
+                    processEndDetails.exitCode(),
+                    processEndDetails.stderrTail());
         } finally {
             synchronized (processLock) {
                 activeProcess = null;
@@ -362,6 +389,67 @@ public final class IsapiAlertStreamRunner implements Runnable {
         return "";
     }
 
+    static CurlProcessEndDetails captureCurlProcessEndDetails(Process process,
+                                                              InputStream errorStream,
+                                                              String username,
+                                                              String password) {
+        if (process == null) {
+            return new CurlProcessEndDetails("-", "-");
+        }
+        String exitCode = "-";
+        try {
+            if (!process.waitFor(CURL_PROCESS_EXIT_WAIT_MILLIS, TimeUnit.MILLISECONDS)) {
+                return new CurlProcessEndDetails(exitCode, "-");
+            }
+            exitCode = String.valueOf(process.exitValue());
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            return new CurlProcessEndDetails(exitCode, "-");
+        } catch (Exception ignored) {
+            return new CurlProcessEndDetails(exitCode, "-");
+        }
+        return new CurlProcessEndDetails(exitCode, sanitizeCurlStderrTail(errorStream, username, password));
+    }
+
+    private static String sanitizeCurlStderrTail(InputStream errorStream, String username, String password) {
+        if (errorStream == null) {
+            return "-";
+        }
+        ByteArrayOutputStream stderrBuffer = new ByteArrayOutputStream();
+        byte[] chunk = new byte[256];
+        try {
+            int read;
+            while ((read = errorStream.read(chunk)) != -1) {
+                stderrBuffer.write(chunk, 0, read);
+            }
+        } catch (IOException ignored) {
+            return "-";
+        }
+        String stderr = stderrBuffer.toString(StandardCharsets.UTF_8);
+        if (isBlank(stderr)) {
+            return "-";
+        }
+        String compact = redactCredentials(stderr, username, password).replace('\n', ' ').replace('\r', ' ').trim();
+        if (compact.length() <= CURL_STDERR_TAIL_MAX_CHARS) {
+            return compact;
+        }
+        return compact.substring(compact.length() - CURL_STDERR_TAIL_MAX_CHARS);
+    }
+
+    static String redactCredentials(String message, String username, String password) {
+        if (isBlank(message)) {
+            return "";
+        }
+        String redacted = message;
+        if (!isBlank(username) && !isBlank(password)) {
+            redacted = redacted.replace(username + ":" + password, username + ":***");
+        }
+        if (!isBlank(password)) {
+            redacted = redacted.replace(password, "***");
+        }
+        return redacted;
+    }
+
     private boolean sleepBackoff(int seconds) {
         try {
             Thread.sleep(seconds * 1000L);
@@ -393,6 +481,9 @@ public final class IsapiAlertStreamRunner implements Runnable {
         }
     }
 
+    record CurlProcessEndDetails(String exitCode, String stderrTail) {
+    }
+
     private static final class AlertStreamResponseException extends Exception {
         private final Integer statusCode;
         private final String subStatusCode;
@@ -415,6 +506,25 @@ public final class IsapiAlertStreamRunner implements Runnable {
 
         boolean deployExceedMax() {
             return deployExceedMax;
+        }
+    }
+
+    private static final class AlertStreamDisconnectedException extends EOFException {
+        private final String curlExitCode;
+        private final String curlStderrTail;
+
+        private AlertStreamDisconnectedException(String message, String curlExitCode, String curlStderrTail) {
+            super(message);
+            this.curlExitCode = safe(curlExitCode);
+            this.curlStderrTail = safe(curlStderrTail);
+        }
+
+        String curlExitCode() {
+            return curlExitCode;
+        }
+
+        String curlStderrTail() {
+            return curlStderrTail;
         }
     }
 }

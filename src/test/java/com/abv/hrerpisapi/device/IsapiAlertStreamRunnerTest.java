@@ -93,6 +93,36 @@ class IsapiAlertStreamRunnerTest {
         }
     }
 
+    @Test
+    void captureCurlProcessEndDetailsShouldIncludeExitCodeAndRedactCredentials() {
+        String stderr = "curl: (28) Operation timed out for admin:12345678!";
+        StubProcess process = new StubProcess(true, 28);
+
+        IsapiAlertStreamRunner.CurlProcessEndDetails details = IsapiAlertStreamRunner.captureCurlProcessEndDetails(
+                process,
+                new ByteArrayInputStream(stderr.getBytes()),
+                "admin",
+                "12345678!");
+
+        assertEquals("28", details.exitCode());
+        assertFalse(details.stderrTail().contains("12345678!"));
+        assertTrue(details.stderrTail().contains("***"));
+    }
+
+    @Test
+    void captureCurlProcessEndDetailsShouldSkipStderrTailWhenProcessStillRunning() {
+        StubProcess process = new StubProcess(false, 0);
+
+        IsapiAlertStreamRunner.CurlProcessEndDetails details = IsapiAlertStreamRunner.captureCurlProcessEndDetails(
+                process,
+                new ByteArrayInputStream("curl: pending".getBytes()),
+                "admin",
+                "secret");
+
+        assertEquals("-", details.exitCode());
+        assertEquals("-", details.stderrTail());
+    }
+
     private static final class TrackableInputStream extends ByteArrayInputStream {
         private boolean closed;
 
@@ -108,11 +138,17 @@ class IsapiAlertStreamRunnerTest {
 
     private static final class StubProcess extends Process {
         private final boolean exitsWithinTimeout;
+        private final int exitCode;
         private boolean destroyCalled;
         private boolean destroyForciblyCalled;
 
         private StubProcess(boolean exitsWithinTimeout) {
+            this(exitsWithinTimeout, 0);
+        }
+
+        private StubProcess(boolean exitsWithinTimeout, int exitCode) {
             this.exitsWithinTimeout = exitsWithinTimeout;
+            this.exitCode = exitCode;
         }
 
         @Override
@@ -142,7 +178,7 @@ class IsapiAlertStreamRunnerTest {
 
         @Override
         public int exitValue() {
-            return 0;
+            return exitCode;
         }
 
         @Override
