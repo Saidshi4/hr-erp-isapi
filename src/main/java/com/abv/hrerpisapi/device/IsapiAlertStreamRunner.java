@@ -37,12 +37,24 @@ public final class IsapiAlertStreamRunner implements Runnable {
             try {
                 runOnce();
                 backoffSeconds = 3;
+            } catch (EOFException eof) {
+                log.info("alertStream disconnected for device {} retry in {}s: {}",
+                        device.getId(), backoffSeconds, eof.getMessage());
+                log.debug("alertStream EOF for device {}", device.getId(), eof);
+                try {
+                    Thread.sleep(backoffSeconds * 1000L);
+                } catch (InterruptedException ex) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+                backoffSeconds = Math.min(backoffSeconds * 2, 60);
             } catch (InterruptedException ie) {
                 Thread.currentThread().interrupt();
                 return;
             } catch (Exception e) {
                 log.warn("alertStream crashed for device {} retry in {}s: {}",
-                        device.getId(), backoffSeconds, e.getMessage(), e);
+                        device.getId(), backoffSeconds, e.getMessage());
+                log.debug("alertStream crash stacktrace for device {}", device.getId(), e);
                 try {
                     Thread.sleep(backoffSeconds * 1000L);
                 } catch (InterruptedException ex) {

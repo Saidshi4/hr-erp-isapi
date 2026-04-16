@@ -35,9 +35,13 @@ public class DeviceWorkerService {
     }
 
     public void startDevice(DeviceEntity device) {
-        if (activeThreads.containsKey(device.getId())) {
-            log.warn("Device {} ({}) is already running, skipping", device.getId(), device.getIp());
-            return;
+        Thread existing = activeThreads.get(device.getId());
+        if (existing != null) {
+            if (existing.isAlive()) {
+                log.warn("Device {} ({}) is already running, skipping", device.getId(), device.getIp());
+                return;
+            }
+            activeThreads.remove(device.getId(), existing);
         }
 
         var runner = new IsapiAlertStreamRunner(device, acsIngestService, eventMapper);
@@ -54,5 +58,17 @@ public class DeviceWorkerService {
             t.interrupt();
             log.info("Stopped alertStream for device {}", deviceId);
         }
+    }
+
+    public boolean isRunning(Long deviceId) {
+        Thread t = activeThreads.get(deviceId);
+        if (t == null) {
+            return false;
+        }
+        if (t.isAlive()) {
+            return true;
+        }
+        activeThreads.remove(deviceId, t);
+        return false;
     }
 }
