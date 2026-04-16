@@ -87,7 +87,11 @@ public class IsapiClient {
                         "application/json", body);
 
         if (resp.statusCode() != 200) {
-            log.warn("AcsEvent/Search returned HTTP {} for device {}", resp.statusCode(), device.getId());
+            if (isAcsEventHistoryNotSupported(resp.body())) {
+                throw new AcsEventHistoryNotSupportedException(device.getId());
+            }
+            log.warn("AcsEvent/Search returned HTTP {} for device {}. responseBody={}",
+                    resp.statusCode(), device.getId(), resp.body());
             return List.of();
         }
 
@@ -127,10 +131,28 @@ public class IsapiClient {
         return new ParsedAcsEvent(serialNo, time, major, minor, employeeNo, cardNo, node.toString());
     }
 
+    private boolean isAcsEventHistoryNotSupported(String responseBody) {
+        try {
+            JsonNode root = OM.readTree(responseBody);
+            String subStatusCode = root.path("subStatusCode").asText("");
+            String statusString = root.path("statusString").asText("");
+            return "notSupport".equalsIgnoreCase(subStatusCode)
+                    || "Invalid Operation".equalsIgnoreCase(statusString);
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
     private DigestHttpClient clientFor(DeviceEntity device) {
         return new DigestHttpClient(
                 "http://" + device.getIp(),
                 device.getUsername(),
                 device.getPassword());
+    }
+
+    public static class AcsEventHistoryNotSupportedException extends RuntimeException {
+        public AcsEventHistoryNotSupportedException(Long deviceId) {
+            super("AcsEvent/Search is not supported for device " + deviceId);
+        }
     }
 }
