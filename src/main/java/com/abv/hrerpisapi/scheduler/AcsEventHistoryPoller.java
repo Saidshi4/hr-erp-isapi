@@ -28,7 +28,7 @@ import java.util.concurrent.ConcurrentHashMap;
 @RequiredArgsConstructor
 public class AcsEventHistoryPoller {
 
-    private static final int MAX_RESULTS = 50;
+    private static final int MAX_RESULTS = 30;
     /** Small backward overlap to tolerate clock skew / edge races */
     private static final int OVERLAP_MINUTES = 2;
 
@@ -95,7 +95,7 @@ public class AcsEventHistoryPoller {
         OffsetDateTime disabledUntil = OffsetDateTime.now().plusMinutes(Math.max(1L, unsupportedCooldownMinutes));
         historyPollingDisabledUntil.put(device.getId(), disabledUntil);
         log.info("HistoryPoller: disabling history polling for device {} ({}) until {} "
-                        + "because /ISAPI/AccessControl/AcsEvent/Search is not supported",
+                        + "because /ISAPI/AccessControl/AcsEvent is not supported",
                 device.getId(), device.getIp(), disabledUntil);
     }
 }
