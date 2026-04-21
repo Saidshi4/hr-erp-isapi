@@ -12,10 +12,12 @@ import org.springframework.stereotype.Service;
 import java.io.IOException;
 import java.net.http.HttpResponse;
 import java.time.OffsetDateTime;
+import java.time.temporal.ChronoUnit;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * ISAPI REST client for UserInfo, CardInfo and AcsEvent endpoints.
@@ -27,7 +29,7 @@ public class IsapiClient {
 
     private static final ObjectMapper OM = new ObjectMapper();
     private static final DateTimeFormatter ISAPI_DT =
-            DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss");
+            DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ssXXX");
     private static final int ACS_EVENT_MAX_RESULTS_CAP = 30;
     private static final int MAX_HISTORY_PAGES = 200;
     private static final String ACS_EVENT_ENDPOINT = "/ISAPI/AccessControl/AcsEvent?format=json";
@@ -85,8 +87,9 @@ public class IsapiClient {
                                                 int maxResults)
             throws IOException, InterruptedException {
 
-        String start = startTime.format(ISAPI_DT);
-        String end = OffsetDateTime.now().format(ISAPI_DT);
+        String start = formatIsapiDateTime(startTime);
+        String end = formatIsapiDateTime(OffsetDateTime.now());
+        String searchId = UUID.randomUUID().toString();
         int cappedResults = Math.max(1, Math.min(maxResults, ACS_EVENT_MAX_RESULTS_CAP));
 
         List<ParsedAcsEvent> result = new ArrayList<>();
@@ -96,9 +99,9 @@ public class IsapiClient {
         int filteredBySerialGuard = 0;
 
         for (int page = 0; page < MAX_HISTORY_PAGES; page++) {
-            String body = buildAcsEventBody(start, end, searchResultPosition, cappedResults, beginSerialNo);
-            log.debug("AcsEvent history request device={} endpoint={} position={} maxResults={} beginSerialNo={}",
-                    device.getId(), ACS_EVENT_ENDPOINT, searchResultPosition, cappedResults,
+            String body = buildAcsEventBody(searchId, start, end, searchResultPosition, cappedResults, beginSerialNo);
+            log.debug("AcsEvent history request device={} endpoint={} searchID={} position={} maxResults={} beginSerialNo={}",
+                    device.getId(), ACS_EVENT_ENDPOINT, searchId, searchResultPosition, cappedResults,
                     beginSerialNo > 0 ? beginSerialNo : null);
 
             HttpResponse<String> resp = clientFor(device)
@@ -108,8 +111,8 @@ public class IsapiClient {
                 if (isAcsEventHistoryNotSupported(resp.statusCode(), resp.body())) {
                     throw new AcsEventHistoryNotSupportedException(device.getId());
                 }
-                log.warn("AcsEvent history request failed: device={} endpoint={} status={} body={}",
-                        device.getId(), ACS_EVENT_ENDPOINT, resp.statusCode(), snippet(resp.body()));
+                log.warn("AcsEvent history request failed: device={} endpoint={} status={} startTime={} endTime={} body={}",
+                        device.getId(), ACS_EVENT_ENDPOINT, resp.statusCode(), start, end, snippet(resp.body()));
                 return result;
             }
 
@@ -209,12 +212,16 @@ public class IsapiClient {
         }
     }
 
-    private String buildAcsEventBody(String start, String end, int searchResultPosition, int maxResults, long beginSerialNo) {
+    static String formatIsapiDateTime(OffsetDateTime value) {
+        return value.truncatedTo(ChronoUnit.SECONDS).format(ISAPI_DT);
+    }
+
+    private String buildAcsEventBody(String searchId, String start, String end, int searchResultPosition, int maxResults, long beginSerialNo) {
         String beginSerialNoField = beginSerialNo > 0 ? ",\"beginSerialNo\":%d".formatted(beginSerialNo) : "";
         return """
-                {"AcsEventCond":{"searchID":"1","searchResultPosition":%d,"maxResults":%d,\
+                {"AcsEventCond":{"searchID":"%s","searchResultPosition":%d,"maxResults":%d,\
                 "major":%d,"minor":%d%s,"startTime":"%s","endTime":"%s"}}"""
-                .formatted(searchResultPosition, maxResults, historyMajor, historyMinor, beginSerialNoField, start, end);
+                .formatted(searchId, searchResultPosition, maxResults, historyMajor, historyMinor, beginSerialNoField, start, end);
     }
 
     private DigestHttpClient clientFor(DeviceEntity device) {
