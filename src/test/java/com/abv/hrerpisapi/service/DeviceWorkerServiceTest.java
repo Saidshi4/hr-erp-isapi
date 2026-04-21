@@ -37,7 +37,7 @@ class DeviceWorkerServiceTest {
 
         service.stopDevice(7L);
 
-        assertEquals(List.of("interrupt", "runnerStop", "wait"), service.calls);
+        assertEquals(List.of("runnerStop", "interrupt", "waitAsync"), service.calls);
     }
 
     @SuppressWarnings("unchecked")
@@ -80,6 +80,11 @@ class DeviceWorkerServiceTest {
         @Override
         protected void stopRunner(IsapiAlertStreamRunner runner) {
             calls.add("runnerStop");
+        }
+
+        @Override
+        protected void waitForThreadStopAsync(Thread thread) {
+            calls.add("waitAsync");
         }
 
         @Override

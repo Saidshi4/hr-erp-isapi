@@ -12,8 +12,9 @@ import org.springframework.stereotype.Service;
 import java.io.IOException;
 import java.net.http.HttpResponse;
 import java.time.OffsetDateTime;
-import java.time.temporal.ChronoUnit;
+import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -28,8 +29,11 @@ import java.util.UUID;
 public class IsapiClient {
 
     private static final ObjectMapper OM = new ObjectMapper();
+
+    // Device expects ISO8601 with offset (e.g. 2026-04-21T15:19:00+04:00)
     private static final DateTimeFormatter ISAPI_DT =
             DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ssXXX");
+
     private static final int ACS_EVENT_MAX_RESULTS_CAP = 30;
     private static final int MAX_HISTORY_PAGES = 200;
     private static final String ACS_EVENT_ENDPOINT = "/ISAPI/AccessControl/AcsEvent?format=json";
@@ -44,11 +48,6 @@ public class IsapiClient {
     // Card lookup
     // -----------------------------------------------------------------------
 
-    /**
-     * Looks up the employeeNo for a given card number via ISAPI CardInfo/Search.
-     *
-     * @return employeeNo, or empty if not found / request failed
-     */
     public Optional<String> searchCardEmployeeNo(DeviceEntity device, String cardNo)
             throws IOException, InterruptedException {
 
@@ -78,8 +77,12 @@ public class IsapiClient {
     // -----------------------------------------------------------------------
 
     /**
-     * Searches ACS event history for events with serialNo > afterSerialNo,
-     * starting from startTime.
+     * Searches ACS event history. We intentionally DO NOT send beginSerialNo/endSerialNo,
+     * because some Value Series firmwares return badJsonContent (errorMsg=endSerialNo)
+     * when serial filtering is present, even if endSerialNo is not provided.
+     *
+     * We instead fetch by time window and apply a local serialNo guard:
+     *   keep only events with serialNo > afterSerialNo
      */
     public List<ParsedAcsEvent> searchAcsEvents(DeviceEntity device,
                                                 OffsetDateTime startTime,
@@ -87,22 +90,30 @@ public class IsapiClient {
                                                 int maxResults)
             throws IOException, InterruptedException {
 
-        String start = formatIsapiDateTime(startTime);
-        String end = formatIsapiDateTime(OffsetDateTime.now());
+        ZoneOffset deviceOffset = OffsetDateTime.now().getOffset();
+
+        OffsetDateTime startForDevice = startTime.withOffsetSameInstant(deviceOffset);
+        OffsetDateTime endForDevice = OffsetDateTime.now().withOffsetSameInstant(deviceOffset);
+
+        String start = formatIsapiDateTime(startForDevice);
+        String end = formatIsapiDateTime(endForDevice);
+
         String searchId = UUID.randomUUID().toString();
         int cappedResults = Math.max(1, Math.min(maxResults, ACS_EVENT_MAX_RESULTS_CAP));
 
         List<ParsedAcsEvent> result = new ArrayList<>();
         int searchResultPosition = 0;
-        long beginSerialNo = afterSerialNo > 0 ? afterSerialNo + 1 : 0;
         boolean exceededPageLimit = true;
         int filteredBySerialGuard = 0;
 
         for (int page = 0; page < MAX_HISTORY_PAGES; page++) {
-            String body = buildAcsEventBody(searchId, start, end, searchResultPosition, cappedResults, beginSerialNo);
-            log.debug("AcsEvent history request device={} endpoint={} searchID={} position={} maxResults={} beginSerialNo={}",
+            String body = buildAcsEventBody(searchId, start, end, searchResultPosition, cappedResults);
+
+            log.info("AcsEvent history request device={} endpoint={} searchID={} position={} maxResults={} major={} minor={} startTime={} endTime={}",
                     device.getId(), ACS_EVENT_ENDPOINT, searchId, searchResultPosition, cappedResults,
-                    beginSerialNo > 0 ? beginSerialNo : null);
+                    historyMajor, historyMinor, start, end);
+
+            log.info("AcsEvent history request body: {}", body);
 
             HttpResponse<String> resp = clientFor(device)
                     .post(ACS_EVENT_ENDPOINT, "application/json", body);
@@ -118,20 +129,24 @@ public class IsapiClient {
 
             JsonNode acsEvent = OM.readTree(resp.body()).path("AcsEvent");
             int numOfMatches = acsEvent.path("numOfMatches").asInt(0);
+
             String responseStatus = acsEvent.path("responseStatusStrg").asText("");
             int totalMatches = acsEvent.path("totalMatches").asInt(0);
-            log.debug("AcsEvent history response: device={} totalMatches={} numOfMatches={} responseStatusStrg={}",
+
+            log.info("AcsEvent history response: device={} totalMatches={} numOfMatches={} responseStatusStrg={}",
                     device.getId(), totalMatches, numOfMatches, responseStatus);
 
             JsonNode events = acsEvent.path("InfoList");
             if (events.isArray()) {
                 for (JsonNode node : events) {
                     long serialNo = node.path("serialNo").asLong(-1);
-                    // Keep a local serial filter as a guard for devices that ignore beginSerialNo.
+
+                    // Local serial guard (de-dup and ignore already-processed events)
                     if (afterSerialNo > 0 && serialNo > 0 && serialNo <= afterSerialNo) {
                         filteredBySerialGuard++;
                         continue;
                     }
+
                     try {
                         result.add(parseHistoryEvent(node));
                     } catch (Exception e) {
@@ -153,13 +168,13 @@ public class IsapiClient {
             }
             searchResultPosition = nextPosition;
         }
+
         if (exceededPageLimit) {
-            log.warn("Stopped AcsEvent history pagination after reaching safety page limit: device={} pages={}. " +
-                            "Consider a shorter polling interval or broader catch-up strategy to avoid missing older records.",
+            log.warn("Stopped AcsEvent history pagination after reaching safety page limit: device={} pages={}.",
                     device.getId(), MAX_HISTORY_PAGES);
         }
         if (filteredBySerialGuard > 0) {
-            log.debug("AcsEvent history serial guard filtered {} event(s) for device={} afterSerialNo={}",
+            log.info("AcsEvent history serial guard filtered {} event(s) for device={} afterSerialNo={}",
                     filteredBySerialGuard, device.getId(), afterSerialNo);
         }
         return result;
@@ -174,7 +189,7 @@ public class IsapiClient {
                     snippet(resp.body()));
         } catch (Exception e) {
             log.info("Device status check failed for device {} ({}): {}", device.getId(), device.getIp(), e.getMessage());
-            log.debug("Device status check exception for device {}", device.getId(), e);
+            log.info("Device status check exception for device {}", device.getId(), e);
             return new DeviceStatusCheckResult(false, -1, snippet(e.getMessage()));
         }
     }
@@ -185,7 +200,6 @@ public class IsapiClient {
 
     private ParsedAcsEvent parseHistoryEvent(JsonNode node) {
         long serialNo = node.path("serialNo").asLong(-1);
-        // History events use "time" field; alertStream uses "dateTime"
         String timeStr = node.path("time").asText(null);
         OffsetDateTime time = timeStr != null ? OffsetDateTime.parse(timeStr) : null;
 
@@ -198,9 +212,7 @@ public class IsapiClient {
     }
 
     private boolean isAcsEventHistoryNotSupported(int statusCode, String responseBody) {
-        if (statusCode == 404) {
-            return true;
-        }
+        if (statusCode == 404) return true;
         try {
             JsonNode root = OM.readTree(responseBody);
             String subStatusCode = root.path("subStatusCode").asText("");
@@ -216,12 +228,15 @@ public class IsapiClient {
         return value.truncatedTo(ChronoUnit.SECONDS).format(ISAPI_DT);
     }
 
-    private String buildAcsEventBody(String searchId, String start, String end, int searchResultPosition, int maxResults, long beginSerialNo) {
-        String beginSerialNoField = beginSerialNo > 0 ? ",\"beginSerialNo\":%d".formatted(beginSerialNo) : "";
+    private String buildAcsEventBody(String searchId,
+                                     String start,
+                                     String end,
+                                     int searchResultPosition,
+                                     int maxResults) {
         return """
                 {"AcsEventCond":{"searchID":"%s","searchResultPosition":%d,"maxResults":%d,\
-                "major":%d,"minor":%d%s,"startTime":"%s","endTime":"%s"}}"""
-                .formatted(searchId, searchResultPosition, maxResults, historyMajor, historyMinor, beginSerialNoField, start, end);
+                "major":%d,"minor":%d,"startTime":"%s","endTime":"%s"}}"""
+                .formatted(searchId, searchResultPosition, maxResults, historyMajor, historyMinor, start, end);
     }
 
     private DigestHttpClient clientFor(DeviceEntity device) {
@@ -232,22 +247,13 @@ public class IsapiClient {
     }
 
     private String snippet(String raw) {
-        if (raw == null) {
-            return "";
-        }
+        if (raw == null) return "";
         String normalized = raw.replace("\n", " ").replace("\r", " ").trim();
         int max = 300;
-        return normalized.length() <= max
-                ? normalized
-                : normalized.substring(0, max) + "...";
+        return normalized.length() <= max ? normalized : normalized.substring(0, max) + "...";
     }
 
-    public record DeviceStatusCheckResult(
-            boolean online,
-            int statusCode,
-            String responseSnippet
-    ) {
-    }
+    public record DeviceStatusCheckResult(boolean online, int statusCode, String responseSnippet) {}
 
     public static class AcsEventHistoryNotSupportedException extends RuntimeException {
         public AcsEventHistoryNotSupportedException(Long deviceId) {

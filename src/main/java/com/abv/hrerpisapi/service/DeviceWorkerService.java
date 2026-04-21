@@ -73,12 +73,12 @@ public class DeviceWorkerService {
     public void stopDevice(Long deviceId) {
         Thread t = activeThreads.remove(deviceId);
         IsapiAlertStreamRunner runner = activeRunners.remove(deviceId);
+        if (runner != null) {
+            stopRunner(runner);
+        }
         if (t != null) {
             interruptThread(t);
-            if (runner != null) {
-                stopRunner(runner);
-            }
-            waitForThreadStop(t);
+            waitForThreadStopAsync(t);
         }
     }
 
@@ -88,6 +88,13 @@ public class DeviceWorkerService {
 
     protected void stopRunner(IsapiAlertStreamRunner runner) {
         runner.stop();
+    }
+
+    protected void waitForThreadStopAsync(Thread thread) {
+        Thread waiter = new Thread(() -> waitForThreadStop(thread),
+                "alertStream-stop-wait-" + thread.getName());
+        waiter.setDaemon(true);
+        waiter.start();
     }
 
     protected void waitForThreadStop(Thread thread) {
