@@ -1,5 +1,6 @@
 package com.abv.hrerpisapi.scheduler;
 
+import com.abv.hrerpisapi.dao.entity.DeviceCursorEntity;
 import com.abv.hrerpisapi.dao.entity.DeviceEntity;
 import com.abv.hrerpisapi.dao.repository.DeviceCursorRepository;
 import com.abv.hrerpisapi.dao.repository.DeviceRepository;
@@ -49,7 +50,7 @@ class AcsEventHistoryPollerTest {
         poller.poll();
         poller.poll();
 
-        verify(isapiClient, times(1)).searchAcsEvents(eq(device), any(), anyLong(), anyInt());
+        verify(isapiClient, times(1)).searchAcsEvents(eq(device), any(), eq(0L), eq(30));
         verifyNoInteractions(acsIngestService);
     }
 
@@ -64,7 +65,24 @@ class AcsEventHistoryPollerTest {
         poller.poll();
         poller.poll();
 
-        verify(isapiClient, times(2)).searchAcsEvents(eq(device), any(), anyLong(), anyInt());
+        verify(isapiClient, times(2)).searchAcsEvents(eq(device), any(), eq(0L), eq(30));
+    }
+
+    @Test
+    void shouldUseCursorSerialNoWhenAvailable() throws Exception {
+        DeviceEntity device = device(1L, "192.168.1.10");
+        DeviceCursorEntity cursor = new DeviceCursorEntity();
+        cursor.setDeviceId(1L);
+        cursor.setLastSerialNo(77L);
+
+        when(deviceRepository.findByEnabledTrue()).thenReturn(List.of(device));
+        when(cursorRepository.findById(1L)).thenReturn(Optional.of(cursor));
+        when(isapiClient.searchAcsEvents(eq(device), any(), anyLong(), anyInt()))
+                .thenReturn(List.of());
+
+        poller.poll();
+
+        verify(isapiClient).searchAcsEvents(eq(device), any(), eq(77L), eq(30));
     }
 
     private DeviceEntity device(Long id, String ip) {
