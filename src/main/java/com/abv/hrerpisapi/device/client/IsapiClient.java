@@ -91,8 +91,9 @@ public class IsapiClient {
 
         List<ParsedAcsEvent> result = new ArrayList<>();
         int searchResultPosition = 0;
-        long beginSerialNo = afterSerialNo > 0 ? afterSerialNo + 1 : -1;
-        boolean hitPageLimit = true;
+        long beginSerialNo = afterSerialNo > 0 ? afterSerialNo + 1 : 0;
+        boolean exceededPageLimit = true;
+        int filteredBySerialGuard = 0;
 
         for (int page = 0; page < MAX_HISTORY_PAGES; page++) {
             String body = buildAcsEventBody(start, end, searchResultPosition, cappedResults, beginSerialNo);
@@ -123,7 +124,11 @@ public class IsapiClient {
             if (events.isArray()) {
                 for (JsonNode node : events) {
                     long serialNo = node.path("serialNo").asLong(-1);
-                    if (afterSerialNo > 0 && serialNo > 0 && serialNo <= afterSerialNo) continue;
+                    // Keep a local serial filter as a guard for devices that ignore beginSerialNo.
+                    if (afterSerialNo > 0 && serialNo > 0 && serialNo <= afterSerialNo) {
+                        filteredBySerialGuard++;
+                        continue;
+                    }
                     try {
                         result.add(parseHistoryEvent(node));
                     } catch (Exception e) {
@@ -133,7 +138,7 @@ public class IsapiClient {
             }
 
             if (numOfMatches <= 0 || !"MORE".equalsIgnoreCase(responseStatus)) {
-                hitPageLimit = false;
+                exceededPageLimit = false;
                 break;
             }
 
@@ -145,9 +150,14 @@ public class IsapiClient {
             }
             searchResultPosition = nextPosition;
         }
-        if (hitPageLimit) {
-            log.warn("Stopped AcsEvent history pagination after reaching safety page limit: device={} pages={}",
+        if (exceededPageLimit) {
+            log.warn("Stopped AcsEvent history pagination after reaching safety page limit: device={} pages={}. " +
+                            "Consider a shorter polling interval or broader catch-up strategy to avoid missing older records.",
                     device.getId(), MAX_HISTORY_PAGES);
+        }
+        if (filteredBySerialGuard > 0) {
+            log.debug("AcsEvent history serial guard filtered {} event(s) for device={} afterSerialNo={}",
+                    filteredBySerialGuard, device.getId(), afterSerialNo);
         }
         return result;
     }
