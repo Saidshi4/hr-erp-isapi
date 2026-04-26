@@ -17,6 +17,7 @@ import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -187,9 +188,8 @@ public class IsapiClient {
     public UserOperationResult addUser(DeviceEntity device, String userName, String password, String userType)
             throws IOException, InterruptedException {
 
-        String body = """
-                {"UserInfo":{"userName":"%s","password":"%s","userType":"%s"}}"""
-                .formatted(userName, password, userType);
+        String body = OM.writeValueAsString(
+                Map.of("UserInfo", Map.of("userName", userName, "password", password, "userType", userType)));
 
         HttpResponse<String> resp = clientFor(device)
                 .post("/ISAPI/AccessControl/UserInfo/SetUp?format=json", "application/json", body);
@@ -200,9 +200,8 @@ public class IsapiClient {
     public UserOperationResult updateUser(DeviceEntity device, String userName, String password, String userType)
             throws IOException, InterruptedException {
 
-        String body = """
-                {"UserInfo":{"userName":"%s","password":"%s","userType":"%s"}}"""
-                .formatted(userName, password, userType);
+        String body = OM.writeValueAsString(
+                Map.of("UserInfo", Map.of("userName", userName, "password", password, "userType", userType)));
 
         HttpResponse<String> resp = clientFor(device)
                 .put("/ISAPI/AccessControl/UserInfo/Modify?format=json", "application/json", body);
@@ -213,8 +212,9 @@ public class IsapiClient {
     public UserOperationResult deleteUser(DeviceEntity device, String userName)
             throws IOException, InterruptedException {
 
+        String encodedUserName = java.net.URLEncoder.encode(userName, java.nio.charset.StandardCharsets.UTF_8);
         HttpResponse<String> resp = clientFor(device)
-                .delete("/ISAPI/AccessControl/UserInfo/Delete?format=json?userName=" + userName, "application/json", "");
+                .delete("/ISAPI/AccessControl/UserInfo/Delete?format=json&userName=" + encodedUserName, "application/json", "");
 
         return toUserOperationResult(resp);
     }
@@ -245,9 +245,12 @@ public class IsapiClient {
     public boolean userExists(DeviceEntity device, String userName)
             throws IOException, InterruptedException {
 
-        String body = """
-                {"UserInfoSearchCond":{"searchID":"1","SearchResultPosition":0,"maxResults":1,\
-                "UserInfo":{"userName":"%s"}}}""".formatted(userName);
+        String body = OM.writeValueAsString(
+                Map.of("UserInfoSearchCond", Map.of(
+                        "searchID", "1",
+                        "SearchResultPosition", 0,
+                        "maxResults", 1,
+                        "UserInfo", Map.of("userName", userName))));
 
         HttpResponse<String> resp = clientFor(device)
                 .post("/ISAPI/AccessControl/UserInfo/Search?format=json", "application/json", body);
