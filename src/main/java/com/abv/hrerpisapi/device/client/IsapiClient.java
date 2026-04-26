@@ -180,6 +180,92 @@ public class IsapiClient {
         return result;
     }
 
+    // -----------------------------------------------------------------------
+    // User management
+    // -----------------------------------------------------------------------
+
+    public UserOperationResult addUser(DeviceEntity device, String userName, String password, String userType)
+            throws IOException, InterruptedException {
+
+        String body = """
+                {"UserInfo":{"userName":"%s","password":"%s","userType":"%s"}}"""
+                .formatted(userName, password, userType);
+
+        HttpResponse<String> resp = clientFor(device)
+                .post("/ISAPI/AccessControl/UserInfo/SetUp?format=json", "application/json", body);
+
+        return toUserOperationResult(resp);
+    }
+
+    public UserOperationResult updateUser(DeviceEntity device, String userName, String password, String userType)
+            throws IOException, InterruptedException {
+
+        String body = """
+                {"UserInfo":{"userName":"%s","password":"%s","userType":"%s"}}"""
+                .formatted(userName, password, userType);
+
+        HttpResponse<String> resp = clientFor(device)
+                .put("/ISAPI/AccessControl/UserInfo/Modify?format=json", "application/json", body);
+
+        return toUserOperationResult(resp);
+    }
+
+    public UserOperationResult deleteUser(DeviceEntity device, String userName)
+            throws IOException, InterruptedException {
+
+        HttpResponse<String> resp = clientFor(device)
+                .delete("/ISAPI/AccessControl/UserInfo/Delete?format=json?userName=" + userName, "application/json", "");
+
+        return toUserOperationResult(resp);
+    }
+
+    public List<String> listUsers(DeviceEntity device)
+            throws IOException, InterruptedException {
+
+        HttpResponse<String> resp = clientFor(device)
+                .get("/ISAPI/AccessControl/UserInfo/UserInfoList?format=json");
+
+        if (resp.statusCode() != 200) {
+            log.warn("UserInfo/UserInfoList returned HTTP {} for device {}", resp.statusCode(), device.getId());
+            return List.of();
+        }
+
+        JsonNode root = OM.readTree(resp.body());
+        JsonNode list = root.path("UserInfo");
+        if (!list.isArray()) return List.of();
+
+        List<String> userNames = new ArrayList<>();
+        for (JsonNode node : list) {
+            String userName = node.path("userName").asText("");
+            if (!userName.isBlank()) userNames.add(userName);
+        }
+        return userNames;
+    }
+
+    public boolean userExists(DeviceEntity device, String userName)
+            throws IOException, InterruptedException {
+
+        String body = """
+                {"UserInfoSearchCond":{"searchID":"1","SearchResultPosition":0,"maxResults":1,\
+                "UserInfo":{"userName":"%s"}}}""".formatted(userName);
+
+        HttpResponse<String> resp = clientFor(device)
+                .post("/ISAPI/AccessControl/UserInfo/Search?format=json", "application/json", body);
+
+        if (resp.statusCode() != 200) return false;
+
+        JsonNode root = OM.readTree(resp.body());
+        JsonNode list = root.path("UserInfo");
+        return list.isArray() && !list.isEmpty();
+    }
+
+    private UserOperationResult toUserOperationResult(HttpResponse<String> resp) {
+        boolean success = resp.statusCode() >= 200 && resp.statusCode() < 300;
+        return new UserOperationResult(success, resp.statusCode(), snippet(resp.body()));
+    }
+
+    public record UserOperationResult(boolean success, int statusCode, String responseSnippet) {}
+
     public DeviceStatusCheckResult checkDeviceStatus(DeviceEntity device) {
         try {
             HttpResponse<String> resp = clientFor(device).get("/ISAPI/System/deviceInfo?format=json");
