@@ -10,12 +10,16 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
+import java.net.URLEncoder;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -34,6 +38,10 @@ public class IsapiClient {
     // Device expects ISO8601 with offset (e.g. 2026-04-21T15:19:00+04:00)
     private static final DateTimeFormatter ISAPI_DT =
             DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ssXXX");
+
+    // DS-K1T series expects local datetime without offset (e.g. 2026-01-01T00:00:00)
+    private static final DateTimeFormatter ISAPI_LOCAL_DT =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss");
 
     private static final int ACS_EVENT_MAX_RESULTS_CAP = 30;
     private static final int MAX_HISTORY_PAGES = 200;
@@ -78,12 +86,9 @@ public class IsapiClient {
     // -----------------------------------------------------------------------
 
     /**
-     * Searches ACS event history. We intentionally DO NOT send beginSerialNo/endSerialNo,
-     * because some Value Series firmwares return badJsonContent (errorMsg=endSerialNo)
-     * when serial filtering is present, even if endSerialNo is not provided.
-     *
-     * We instead fetch by time window and apply a local serialNo guard:
-     *   keep only events with serialNo > afterSerialNo
+     * Searches ACS event history. Sends beginSerialNo when afterSerialNo > 0
+     * to allow firmware-level filtering. A local serialNo guard is applied as
+     * an additional de-duplication safeguard for devices that ignore beginSerialNo.
      */
     public List<ParsedAcsEvent> searchAcsEvents(DeviceEntity device,
                                                 OffsetDateTime startTime,
@@ -108,7 +113,7 @@ public class IsapiClient {
         int filteredBySerialGuard = 0;
 
         for (int page = 0; page < MAX_HISTORY_PAGES; page++) {
-            String body = buildAcsEventBody(searchId, start, end, searchResultPosition, cappedResults);
+            String body = buildAcsEventBody(searchId, start, end, searchResultPosition, cappedResults, afterSerialNo);
 
             log.info("AcsEvent history request device={} endpoint={} searchID={} position={} maxResults={} major={} minor={} startTime={} endTime={}",
                     device.getId(), ACS_EVENT_ENDPOINT, searchId, searchResultPosition, cappedResults,
@@ -182,7 +187,143 @@ public class IsapiClient {
     }
 
     // -----------------------------------------------------------------------
-    // User management
+    // DS-K1T series device user management
+    // -----------------------------------------------------------------------
+
+    /**
+     * Adds a user to a DS-K1T series device via UserInfo/Record endpoint.
+     */
+    public UserOperationResult addDeviceUser(DeviceEntity device,
+                                             String employeeNo,
+                                             String name,
+                                             String userType,
+                                             String gender,
+                                             LocalDateTime beginTime,
+                                             LocalDateTime endTime)
+            throws IOException, InterruptedException {
+
+        String body = OM.writeValueAsString(
+                Map.of("UserInfo", buildUserInfoMap(employeeNo, name, userType, gender, beginTime, endTime)));
+
+        HttpResponse<String> resp = clientFor(device)
+                .post("/ISAPI/AccessControl/UserInfo/Record?format=json", "application/json", body);
+
+        return toUserOperationResult(resp);
+    }
+
+    /**
+     * Updates a user on a DS-K1T series device via UserInfo/Modify endpoint.
+     */
+    public UserOperationResult updateDeviceUser(DeviceEntity device,
+                                                String employeeNo,
+                                                String name,
+                                                String userType,
+                                                String gender,
+                                                LocalDateTime beginTime,
+                                                LocalDateTime endTime)
+            throws IOException, InterruptedException {
+
+        String body = OM.writeValueAsString(
+                Map.of("UserInfo", buildUserInfoMap(employeeNo, name, userType, gender, beginTime, endTime)));
+
+        HttpResponse<String> resp = clientFor(device)
+                .put("/ISAPI/AccessControl/UserInfo/Modify?format=json", "application/json", body);
+
+        return toUserOperationResult(resp);
+    }
+
+    /**
+     * Deletes a user from a DS-K1T series device.
+     */
+    public UserOperationResult deleteDeviceUser(DeviceEntity device, String employeeNo)
+            throws IOException, InterruptedException {
+
+        String encoded = URLEncoder.encode(employeeNo, StandardCharsets.UTF_8);
+        HttpResponse<String> resp = clientFor(device)
+                .delete("/ISAPI/AccessControl/UserInfo/Delete?format=json&userName=" + encoded,
+                        "application/json", "");
+
+        return toUserOperationResult(resp);
+    }
+
+    /**
+     * Checks whether a user with the given employeeNo exists on the device.
+     */
+    public boolean deviceUserExists(DeviceEntity device, String employeeNo)
+            throws IOException, InterruptedException {
+
+        String body = OM.writeValueAsString(
+                Map.of("UserInfoSearchCond", Map.of(
+                        "searchID", "search_" + employeeNo,
+                        "searchResultPosition", 0,
+                        "maxResults", 1,
+                        "UserInfo", Map.of("employeeNo", employeeNo))));
+
+        HttpResponse<String> resp = clientFor(device)
+                .post("/ISAPI/AccessControl/UserInfo/Search?format=json", "application/json", body);
+
+        if (resp.statusCode() != 200) return false;
+
+        JsonNode root = OM.readTree(resp.body());
+        JsonNode list = root.path("UserInfo");
+        return list.isArray() && !list.isEmpty();
+    }
+
+    /**
+     * Uploads a face photo to a DS-K1T device via URL reference.
+     */
+    public UserOperationResult uploadFaceByUrl(DeviceEntity device, String employeeNo, String faceUrl)
+            throws IOException, InterruptedException {
+
+        String body = OM.writeValueAsString(
+                Map.of("FaceData", Map.of(
+                        "faceLibType", "normalFD",
+                        "employeeNo", employeeNo,
+                        "faceURL", faceUrl)));
+
+        HttpResponse<String> resp = clientFor(device)
+                .put("/ISAPI/AccessControl/Face/FaceData?format=json", "application/json", body);
+
+        return toUserOperationResult(resp);
+    }
+
+    /**
+     * Uploads a face photo to a DS-K1T device as binary multipart/form-data.
+     */
+    public UserOperationResult uploadFaceBinary(DeviceEntity device, String employeeNo, byte[] imageBytes)
+            throws IOException, InterruptedException {
+
+        String boundary = UUID.randomUUID().toString().replace("-", "");
+        String jsonPart = "{\"FaceData\":{\"faceLibType\":\"normalFD\",\"employeeNo\":\""
+                + employeeNo + "\"}}";
+
+        byte[] jsonBytes = jsonPart.getBytes(StandardCharsets.UTF_8);
+        byte[] part1Header = ("--" + boundary + "\r\n"
+                + "Content-Disposition: form-data; name=\"FaceData\"; filename=\"FaceData.json\"\r\n"
+                + "Content-Type: application/json\r\n\r\n").getBytes(StandardCharsets.UTF_8);
+        byte[] part2Header = ("\r\n--" + boundary + "\r\n"
+                + "Content-Disposition: form-data; name=\"FaceImage\"; filename=\"face.jpg\"\r\n"
+                + "Content-Type: image/jpeg\r\n\r\n").getBytes(StandardCharsets.UTF_8);
+        byte[] trailer = ("\r\n--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8);
+
+        byte[] multipartBody = new byte[
+                part1Header.length + jsonBytes.length + part2Header.length + imageBytes.length + trailer.length];
+        int pos = 0;
+        System.arraycopy(part1Header, 0, multipartBody, pos, part1Header.length); pos += part1Header.length;
+        System.arraycopy(jsonBytes, 0, multipartBody, pos, jsonBytes.length);     pos += jsonBytes.length;
+        System.arraycopy(part2Header, 0, multipartBody, pos, part2Header.length); pos += part2Header.length;
+        System.arraycopy(imageBytes, 0, multipartBody, pos, imageBytes.length);   pos += imageBytes.length;
+        System.arraycopy(trailer, 0, multipartBody, pos, trailer.length);
+
+        HttpResponse<String> resp = clientFor(device)
+                .putBytes("/ISAPI/AccessControl/Face/FaceData?format=json",
+                        "multipart/form-data; boundary=" + boundary, multipartBody);
+
+        return toUserOperationResult(resp);
+    }
+
+    // -----------------------------------------------------------------------
+    // Legacy user management (generic devices)
     // -----------------------------------------------------------------------
 
     public UserOperationResult addUser(DeviceEntity device, String userName, String password, String userType)
@@ -212,7 +353,7 @@ public class IsapiClient {
     public UserOperationResult deleteUser(DeviceEntity device, String userName)
             throws IOException, InterruptedException {
 
-        String encodedUserName = java.net.URLEncoder.encode(userName, java.nio.charset.StandardCharsets.UTF_8);
+        String encodedUserName = URLEncoder.encode(userName, StandardCharsets.UTF_8);
         HttpResponse<String> resp = clientFor(device)
                 .delete("/ISAPI/AccessControl/UserInfo/Delete?format=json&userName=" + encodedUserName, "application/json", "");
 
@@ -287,6 +428,23 @@ public class IsapiClient {
     // Private helpers
     // -----------------------------------------------------------------------
 
+    private Map<String, Object> buildUserInfoMap(String employeeNo,
+                                                 String name,
+                                                 String userType,
+                                                 String gender,
+                                                 LocalDateTime beginTime,
+                                                 LocalDateTime endTime) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        map.put("employeeNo", employeeNo);
+        map.put("name", name);
+        map.put("userType", userType != null ? userType : "normal");
+        map.put("closeDelayEnabled", false);
+        if (gender != null) map.put("gender", gender);
+        if (beginTime != null) map.put("beginTime", beginTime.format(ISAPI_LOCAL_DT));
+        if (endTime != null) map.put("endTime", endTime.format(ISAPI_LOCAL_DT));
+        return map;
+    }
+
     private ParsedAcsEvent parseHistoryEvent(JsonNode node) {
         long serialNo = node.path("serialNo").asLong(-1);
         String timeStr = node.path("time").asText(null);
@@ -321,11 +479,13 @@ public class IsapiClient {
                                      String start,
                                      String end,
                                      int searchResultPosition,
-                                     int maxResults) {
+                                     int maxResults,
+                                     long beginSerialNo) {
+        String serialPart = beginSerialNo > 0 ? ",\"beginSerialNo\":" + beginSerialNo : "";
         return """
                 {"AcsEventCond":{"searchID":"%s","searchResultPosition":%d,"maxResults":%d,\
-                "major":%d,"minor":%d,"startTime":"%s","endTime":"%s"}}"""
-                .formatted(searchId, searchResultPosition, maxResults, historyMajor, historyMinor, start, end);
+                "major":%d,"minor":%d,"startTime":"%s","endTime":"%s"%s}}"""
+                .formatted(searchId, searchResultPosition, maxResults, historyMajor, historyMinor, start, end, serialPart);
     }
 
     private DigestHttpClient clientFor(DeviceEntity device) {

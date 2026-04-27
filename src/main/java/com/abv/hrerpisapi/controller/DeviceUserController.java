@@ -5,9 +5,10 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 
-import java.time.OffsetDateTime;
+import java.time.LocalDateTime;
 import java.util.List;
 
 @RestController
@@ -20,68 +21,105 @@ public class DeviceUserController {
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
-    public DeviceUserResponse addUser(@PathVariable Long deviceId,
-                                      @RequestBody DeviceUserRequest request) {
-        validateRequest(request, true);
-        return deviceUserService.addUserToDevice(deviceId, request);
+    public DeviceUserResponse createUser(@PathVariable Long deviceId,
+                                         @RequestBody DeviceUserCreateRequest request) {
+        validateCreateRequest(request);
+        return deviceUserService.createDeviceUser(deviceId, request);
+    }
+
+    @GetMapping
+    public List<DeviceUserResponse> listUsers(@PathVariable Long deviceId) {
+        return deviceUserService.listDeviceUsers(deviceId);
+    }
+
+    @GetMapping("/{userId}")
+    public DeviceUserResponse getUser(@PathVariable Long deviceId,
+                                      @PathVariable Long userId) {
+        return deviceUserService.getDeviceUser(deviceId, userId);
     }
 
     @PutMapping("/{userId}")
     public DeviceUserResponse updateUser(@PathVariable Long deviceId,
                                          @PathVariable Long userId,
-                                         @RequestBody DeviceUserRequest request) {
-        return deviceUserService.updateUserOnDevice(deviceId, userId, request);
+                                         @RequestBody DeviceUserUpdateRequest request) {
+        return deviceUserService.updateDeviceUser(deviceId, userId, request);
     }
 
     @DeleteMapping("/{userId}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void deleteUser(@PathVariable Long deviceId,
                            @PathVariable Long userId) {
-        deviceUserService.deleteUserFromDevice(deviceId, userId);
-    }
-
-    @GetMapping
-    public DeviceUserListResponse listUsers(@PathVariable Long deviceId) {
-        List<DeviceUserResponse> users = deviceUserService.listDeviceUsers(deviceId);
-        return new DeviceUserListResponse(users);
+        deviceUserService.deleteDeviceUser(deviceId, userId);
     }
 
     @PostMapping("/{userId}/sync")
-    public DeviceUserResponse syncUser(@PathVariable Long deviceId,
-                                       @PathVariable Long userId) {
+    public DeviceUserSyncResponse syncUser(@PathVariable Long deviceId,
+                                           @PathVariable Long userId) {
         return deviceUserService.syncUserToDevice(deviceId, userId);
     }
 
-    private void validateRequest(DeviceUserRequest request, boolean requirePassword) {
-        if (request.username() == null || request.username().isBlank()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "username is required");
+    @PostMapping("/{userId}/face")
+    public DeviceUserResponse uploadFace(@PathVariable Long deviceId,
+                                         @PathVariable Long userId,
+                                         @RequestParam("file") MultipartFile file) {
+        return deviceUserService.uploadFaceData(deviceId, userId, file);
+    }
+
+    private void validateCreateRequest(DeviceUserCreateRequest request) {
+        if (request.employeeNo() == null || request.employeeNo().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "employeeNo is required");
         }
-        if (requirePassword && (request.password() == null || request.password().isBlank())) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "password is required");
+        if (request.name() == null || request.name().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "name is required");
         }
     }
 
-    public record DeviceUserRequest(
-            String username,
-            String password,
+    public record DeviceUserCreateRequest(
+            String employeeNo,
+            String name,
             String userType,
-            String name
+            String gender,
+            String beginTime,
+            String endTime,
+            String faceDataUrl
+    ) {
+    }
+
+    public record DeviceUserUpdateRequest(
+            String name,
+            String userType,
+            String gender,
+            String beginTime,
+            String endTime,
+            String faceDataUrl
     ) {
     }
 
     public record DeviceUserResponse(
             Long id,
             Long deviceId,
-            String username,
-            String userType,
+            String employeeNo,
             String name,
+            String userType,
+            String gender,
+            LocalDateTime beginTime,
+            LocalDateTime endTime,
+            String faceDataUrl,
             boolean syncedToDevice,
-            OffsetDateTime lastSyncTime
+            LocalDateTime lastSyncTime,
+            LocalDateTime createdAt,
+            LocalDateTime updatedAt
     ) {
     }
 
-    public record DeviceUserListResponse(
-            List<DeviceUserResponse> users
+    public record DeviceUserSyncResponse(
+            Long id,
+            Long deviceId,
+            String employeeNo,
+            boolean syncedToDevice,
+            LocalDateTime lastSyncTime,
+            String status,
+            String message
     ) {
     }
 }
