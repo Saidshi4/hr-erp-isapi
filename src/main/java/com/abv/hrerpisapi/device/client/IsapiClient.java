@@ -293,31 +293,24 @@ public class IsapiClient {
     public UserOperationResult uploadFaceBinary(DeviceEntity device, String employeeNo, byte[] imageBytes)
             throws IOException, InterruptedException {
 
-        String boundary = UUID.randomUUID().toString().replace("-", "");
+        String boundary = "----HikIsapiBoundary" + UUID.randomUUID().toString().replace("-", "");
         String jsonPart = "{\"FaceData\":{\"faceLibType\":\"normalFD\",\"employeeNo\":\""
                 + employeeNo + "\"}}";
 
-        byte[] jsonBytes = jsonPart.getBytes(StandardCharsets.UTF_8);
-        byte[] part1Header = ("--" + boundary + "\r\n"
+        java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+        baos.write(("--" + boundary + "\r\n"
                 + "Content-Disposition: form-data; name=\"FaceData\"; filename=\"FaceData.json\"\r\n"
-                + "Content-Type: application/json\r\n\r\n").getBytes(StandardCharsets.UTF_8);
-        byte[] part2Header = ("\r\n--" + boundary + "\r\n"
+                + "Content-Type: application/json\r\n\r\n").getBytes(StandardCharsets.UTF_8));
+        baos.write(jsonPart.getBytes(StandardCharsets.UTF_8));
+        baos.write(("\r\n--" + boundary + "\r\n"
                 + "Content-Disposition: form-data; name=\"FaceImage\"; filename=\"face.jpg\"\r\n"
-                + "Content-Type: image/jpeg\r\n\r\n").getBytes(StandardCharsets.UTF_8);
-        byte[] trailer = ("\r\n--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8);
-
-        byte[] multipartBody = new byte[
-                part1Header.length + jsonBytes.length + part2Header.length + imageBytes.length + trailer.length];
-        int pos = 0;
-        System.arraycopy(part1Header, 0, multipartBody, pos, part1Header.length); pos += part1Header.length;
-        System.arraycopy(jsonBytes, 0, multipartBody, pos, jsonBytes.length);     pos += jsonBytes.length;
-        System.arraycopy(part2Header, 0, multipartBody, pos, part2Header.length); pos += part2Header.length;
-        System.arraycopy(imageBytes, 0, multipartBody, pos, imageBytes.length);   pos += imageBytes.length;
-        System.arraycopy(trailer, 0, multipartBody, pos, trailer.length);
+                + "Content-Type: image/jpeg\r\n\r\n").getBytes(StandardCharsets.UTF_8));
+        baos.write(imageBytes);
+        baos.write(("\r\n--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
 
         HttpResponse<String> resp = clientFor(device)
                 .putBytes("/ISAPI/AccessControl/Face/FaceData?format=json",
-                        "multipart/form-data; boundary=" + boundary, multipartBody);
+                        "multipart/form-data; boundary=" + boundary, baos.toByteArray());
 
         return toUserOperationResult(resp);
     }
