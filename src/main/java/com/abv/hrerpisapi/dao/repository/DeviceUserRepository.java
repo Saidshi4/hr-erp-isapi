@@ -12,7 +12,7 @@ public interface DeviceUserRepository extends JpaRepository<DeviceUserEntity, Lo
 
     Optional<DeviceUserEntity> findByDeviceIdAndId(Long deviceId, Long id);
 
-    boolean existsByDeviceIdAndUsername(Long deviceId, String username);
+    boolean existsByDeviceIdAndEmployeeNo(Long deviceId, String employeeNo);
 
-    Optional<DeviceUserEntity> findByDeviceIdAndUsername(Long deviceId, String username);
+    Optional<DeviceUserEntity> findByDeviceIdAndEmployeeNo(Long deviceId, String employeeNo);
 }

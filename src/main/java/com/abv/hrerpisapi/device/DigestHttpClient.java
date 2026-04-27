@@ -146,6 +146,10 @@ public class DigestHttpClient {
         return sendWithDigest("PUT", path, contentType, body);
     }
 
+    public HttpResponse<String> putBytes(String path, String contentType, byte[] body) throws IOException, InterruptedException {
+        return sendWithDigestBytes("PUT", path, contentType, body);
+    }
+
     public HttpResponse<String> delete(String path, String contentType, String body) throws IOException, InterruptedException {
         return sendWithDigest("DELETE", path, contentType, body);
     }
@@ -158,6 +162,42 @@ public class DigestHttpClient {
         HttpRequest.BodyPublisher publisher =
                 (body == null) ? HttpRequest.BodyPublishers.noBody()
                         : HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8);
+
+        HttpRequest req1 = HttpRequest.newBuilder(uri)
+                .timeout(Duration.ofSeconds(30))
+                .header("Accept", "application/json, application/xml, text/xml, */*")
+                .header("Content-Type", contentType)
+                .method(method, publisher)
+                .build();
+
+        HttpResponse<String> r1 = client.send(req1, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        if (r1.statusCode() != 401) return r1;
+
+        String www = r1.headers().firstValue("WWW-Authenticate")
+                .orElseThrow(() -> new IOException("Missing WWW-Authenticate header"));
+
+        DigestChallenge ch = DigestChallenge.parse(www);
+        String auth = buildDigestAuthorization(ch, method, uri.getPath());
+
+        HttpRequest req2 = HttpRequest.newBuilder(uri)
+                .timeout(Duration.ofSeconds(30))
+                .header("Accept", "application/json, application/xml, text/xml, */*")
+                .header("Content-Type", contentType)
+                .header("Authorization", auth)
+                .method(method, publisher)
+                .build();
+
+        return client.send(req2, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+    }
+
+    private HttpResponse<String> sendWithDigestBytes(String method, String path, String contentType, byte[] body)
+            throws IOException, InterruptedException {
+
+        URI uri = URI.create(baseUrl + path);
+
+        HttpRequest.BodyPublisher publisher =
+                (body == null) ? HttpRequest.BodyPublishers.noBody()
+                        : HttpRequest.BodyPublishers.ofByteArray(body);
 
         HttpRequest req1 = HttpRequest.newBuilder(uri)
                 .timeout(Duration.ofSeconds(30))

@@ -7,14 +7,14 @@ import lombok.Setter;
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
 
-import java.time.OffsetDateTime;
+import java.time.LocalDateTime;
 
 @Entity
 @Table(
         name = "device_users",
         uniqueConstraints = @UniqueConstraint(
-                name = "uq_device_user_username",
-                columnNames = {"device_id", "username"}
+                name = "uq_device_user_employee_no",
+                columnNames = {"device_id", "employee_no"}
         )
 )
 @Getter
@@ -29,28 +29,37 @@ public class DeviceUserEntity {
     @Column(name = "device_id", nullable = false)
     private Long deviceId;
 
-    @Column(nullable = false)
-    private String username;
+    @Column(name = "employee_no", nullable = false)
+    private String employeeNo;
 
     @Column(nullable = false)
-    private String password;
+    private String name;
 
     @Column(name = "user_type", nullable = false)
     private String userType;
 
-    private String name;
+    private String gender;
+
+    @Column(name = "begin_time")
+    private LocalDateTime beginTime;
+
+    @Column(name = "end_time")
+    private LocalDateTime endTime;
+
+    @Column(name = "face_data_url")
+    private String faceDataUrl;
 
     @Column(name = "synced_to_device", nullable = false)
     private boolean syncedToDevice = false;
 
     @Column(name = "last_sync_time")
-    private OffsetDateTime lastSyncTime;
+    private LocalDateTime lastSyncTime;
 
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)
-    private OffsetDateTime createdAt;
+    private LocalDateTime createdAt;
 
     @UpdateTimestamp
     @Column(name = "updated_at")
-    private OffsetDateTime updatedAt;
+    private LocalDateTime updatedAt;
 }
