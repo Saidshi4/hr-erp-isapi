@@ -427,14 +427,28 @@ public class IsapiClient {
                                                  String gender,
                                                  LocalDateTime beginTime,
                                                  LocalDateTime endTime) {
+        LocalDateTime effectiveBegin = beginTime != null ? beginTime
+                : LocalDateTime.parse("2026-04-27T00:00:00");
+        LocalDateTime effectiveEnd = endTime != null ? endTime
+                : LocalDateTime.parse("2036-04-26T23:59:59");
+
+        Map<String, Object> valid = new LinkedHashMap<>();
+        valid.put("enable", true);
+        valid.put("beginTime", effectiveBegin.format(ISAPI_LOCAL_DT));
+        valid.put("endTime", effectiveEnd.format(ISAPI_LOCAL_DT));
+        valid.put("timeType", "local");
+
         Map<String, Object> map = new LinkedHashMap<>();
         map.put("employeeNo", employeeNo);
         map.put("name", name);
         map.put("userType", userType != null ? userType : "normal");
-        map.put("closeDelayEnabled", false);
         if (gender != null) map.put("gender", gender);
-        if (beginTime != null) map.put("beginTime", beginTime.format(ISAPI_LOCAL_DT));
-        if (endTime != null) map.put("endTime", endTime.format(ISAPI_LOCAL_DT));
+        map.put("localUIRight", false);
+        map.put("maxOpenDoorTime", 0);
+        map.put("Valid", valid);
+        map.put("doorRight", "1");
+        map.put("RightPlan", List.of(Map.of("doorNo", 1, "planTemplateNo", "1")));
+        map.put("userVerifyMode", "");
         return map;
     }
 
