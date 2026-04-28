@@ -488,10 +488,13 @@ public class IsapiClient {
                                      int searchResultPosition,
                                      int maxResults,
                                      long beginSerialNo) {
-        String serialPart = beginSerialNo > 0 ? ",\"beginSerialNo\":" + beginSerialNo : "";
+        String serialPart = "";
+        if (beginSerialNo > 0) {
+            serialPart = ",\"beginSerialNo\":" + beginSerialNo + ",\"endSerialNo\":0";
+        }
         return """
-                {"AcsEventCond":{"searchID":"%s","searchResultPosition":%d,"maxResults":%d,\
-                "major":%d,"minor":%d,"startTime":"%s","endTime":"%s"%s}}"""
+            {"AcsEventCond":{"searchID":"%s","searchResultPosition":%d,"maxResults":%d,\
+            "major":%d,"minor":%d,"startTime":"%s","endTime":"%s"%s}}"""
                 .formatted(searchId, searchResultPosition, maxResults, historyMajor, historyMinor, start, end, serialPart);
     }
 
