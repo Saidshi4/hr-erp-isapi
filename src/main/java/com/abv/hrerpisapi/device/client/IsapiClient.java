@@ -490,7 +490,10 @@ public class IsapiClient {
                                      long beginSerialNo) {
         String serialPart = "";
         if (beginSerialNo > 0) {
-            serialPart = ",\"beginSerialNo\":" + beginSerialNo + ",\"endSerialNo\":0";
+            // Device hər dəfə serialNo-nu sıfırlamaq istəmir -
+            // Elə burada serial filtri istəmir, sırf pagination edir
+            serialPart = ",\"beginSerialNo\":" + beginSerialNo;
+            // endSerialNo SILMƏ - device onu qəbul etmir!
         }
         return """
             {"AcsEventCond":{"searchID":"%s","searchResultPosition":%d,"maxResults":%d,\
