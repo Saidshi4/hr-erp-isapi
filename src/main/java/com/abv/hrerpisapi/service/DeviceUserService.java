@@ -203,8 +203,6 @@ public class DeviceUserService {
                 throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
                         "Face upload failed: " + result.responseSnippet());
             }
-        } catch (ResponseStatusException e) {
-            throw e;
         } catch (IOException | InterruptedException e) {
             if (e instanceof InterruptedException) Thread.currentThread().interrupt();
             log.warn("ActionLog.deviceUser.face.upload.error deviceId={} userId={} employeeNo={} error={}",

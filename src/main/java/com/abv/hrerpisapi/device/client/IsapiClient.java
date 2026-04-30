@@ -113,7 +113,7 @@ public class IsapiClient {
         int filteredBySerialGuard = 0;
 
         for (int page = 0; page < MAX_HISTORY_PAGES; page++) {
-            String body = buildAcsEventBody(searchId, start, end, searchResultPosition, cappedResults, afterSerialNo);
+            String body = buildAcsEventBody(searchId, start, end, searchResultPosition, cappedResults);
 
             log.info("AcsEvent history request device={} endpoint={} searchID={} position={} maxResults={} major={} minor={} startTime={} endTime={}",
                     device.getId(), ACS_EVENT_ENDPOINT, searchId, searchResultPosition, cappedResults,
@@ -482,23 +482,43 @@ public class IsapiClient {
         return value.truncatedTo(ChronoUnit.SECONDS).format(ISAPI_DT);
     }
 
+//    private String buildAcsEventBody(String searchId,
+//                                     String start,
+//                                     String end,
+//                                     int searchResultPosition,
+//                                     int maxResults,
+//                                     long beginSerialNo) {
+//
+//        // Serial nömrələri SILIN - device bunları istəmir
+//        // Yalnız searchID və searchResultPosition istifadə edin
+//
+//        return """
+//            {"AcsEventCond":{"searchID":"%s","searchResultPosition":%d,"maxResults":%d,\
+//            "major":%d,"minor":%d,"startTime":"%s","endTime":"%s"}}"""
+//                .formatted(searchId, searchResultPosition, maxResults,
+//                        historyMajor, historyMinor, start, end);
+//    }
+
     private String buildAcsEventBody(String searchId,
                                      String start,
                                      String end,
                                      int searchResultPosition,
-                                     int maxResults,
-                                     long beginSerialNo) {
-        String serialPart = "";
-        if (beginSerialNo > 0) {
-            // Device hər dəfə serialNo-nu sıfırlamaq istəmir -
-            // Elə burada serial filtri istəmir, sırf pagination edir
-            serialPart = ",\"beginSerialNo\":" + beginSerialNo;
-            // endSerialNo SILMƏ - device onu qəbul etmir!
+                                     int maxResults) {
+
+        Map<String, Object> cond = new LinkedHashMap<>();
+        cond.put("searchID", searchId);
+        cond.put("searchResultPosition", searchResultPosition);
+        cond.put("maxResults", maxResults);
+        cond.put("major", historyMajor);
+        cond.put("minor", historyMinor);
+        cond.put("startTime", start);
+        cond.put("endTime", end);
+
+        try {
+            return OM.writeValueAsString(Map.of("AcsEventCond", cond));
+        } catch (Exception e) {
+            throw new RuntimeException(e);
         }
-        return """
-            {"AcsEventCond":{"searchID":"%s","searchResultPosition":%d,"maxResults":%d,\
-            "major":%d,"minor":%d,"startTime":"%s","endTime":"%s"%s}}"""
-                .formatted(searchId, searchResultPosition, maxResults, historyMajor, historyMinor, start, end, serialPart);
     }
 
     private DigestHttpClient clientFor(DeviceEntity device) {
