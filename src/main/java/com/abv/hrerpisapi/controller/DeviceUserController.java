@@ -4,6 +4,7 @@ import com.abv.hrerpisapi.service.DeviceUserService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
@@ -58,7 +59,7 @@ public class DeviceUserController {
         return deviceUserService.syncUserToDevice(deviceId, userId);
     }
 
-    @PostMapping("/{userId}/face")
+    @PostMapping(value = "/{userId}/face", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public DeviceUserResponse uploadFace(@PathVariable Long deviceId,
                                          @PathVariable Long userId,
                                          @RequestParam("file") MultipartFile file) {

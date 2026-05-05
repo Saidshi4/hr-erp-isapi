@@ -193,7 +193,7 @@ public class DeviceUserService {
 
         try {
             byte[] imageBytes = file.getBytes();
-            UserOperationResult result = isapiClient.uploadFaceBinary(device, entity.getEmployeeNo(), imageBytes);
+            UserOperationResult result = isapiClient.uploadFaceToFDLib(device, entity.getEmployeeNo(), imageBytes);
             if (result.success()) {
                 log.info("ActionLog.deviceUser.face.upload.ended deviceId={} userId={} employeeNo={} synced=true",
                         deviceId, entity.getId(), entity.getEmployeeNo());

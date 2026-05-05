@@ -294,20 +294,28 @@ public class IsapiClient {
             throws IOException, InterruptedException {
 
         String boundary = "----HikIsapiBoundary" + UUID.randomUUID().toString().replace("-", "");
-        String jsonPart = "{\"FaceData\":{\"faceLibType\":\"normalFD\",\"employeeNo\":\""
-                + employeeNo + "\"}}";
+
+        // JSON strukturunda sahə adı cihazın gözlədiyi formatda olmalıdır
+        String jsonPart = "{\"faceLibType\":\"normalFD\",\"employeeNo\":\"" + employeeNo + "\"}";
 
         java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+
+        // 1-ci HİSSƏ: JSON Məlumatı (Sahə adı: FacelibDataJSON)
         baos.write(("--" + boundary + "\r\n"
-                + "Content-Disposition: form-data; name=\"FaceData\"; filename=\"FaceData.json\"\r\n"
+                + "Content-Disposition: form-data; name=\"FacelibDataJSON\"\r\n"
                 + "Content-Type: application/json\r\n\r\n").getBytes(StandardCharsets.UTF_8));
         baos.write(jsonPart.getBytes(StandardCharsets.UTF_8));
+
+        // 2-ci HİSSƏ: Şəkil Məlumatı (Sahə adı: FaceImage)
         baos.write(("\r\n--" + boundary + "\r\n"
                 + "Content-Disposition: form-data; name=\"FaceImage\"; filename=\"face.jpg\"\r\n"
                 + "Content-Type: image/jpeg\r\n\r\n").getBytes(StandardCharsets.UTF_8));
         baos.write(imageBytes);
+
+        // SONLANDIRICI
         baos.write(("\r\n--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
 
+        // Endpoint URL-i düzgündür
         HttpResponse<String> resp = clientFor(device)
                 .putBytes("/ISAPI/AccessControl/Face/FaceData?format=json",
                         "multipart/form-data; boundary=" + boundary, baos.toByteArray());
@@ -315,6 +323,37 @@ public class IsapiClient {
         return toUserOperationResult(resp);
     }
 
+    public UserOperationResult uploadFaceToFDLib(DeviceEntity device, String employeeNo, byte[] imageBytes)
+            throws IOException, InterruptedException {
+
+        String boundary = "----HikIsapiBoundary" + UUID.randomUUID().toString().replace("-", "");
+
+        // FDLib üçün JSON strukturu adətən belədir
+        String jsonPart = "{\"faceLibType\":\"blackFD\",\"FDID\":\"1\",\"FPID\":\"" + employeeNo + "\"}";
+
+        java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+
+        // 1. JSON Hissəsi (Sahə adı: FaceFDLibJSON)
+        baos.write(("--" + boundary + "\r\n"
+                + "Content-Disposition: form-data; name=\"FaceFDLibJSON\"\r\n"
+                + "Content-Type: application/json\r\n\r\n").getBytes(StandardCharsets.UTF_8));
+        baos.write(jsonPart.getBytes(StandardCharsets.UTF_8));
+
+        // 2. Şəkil Hissəsi (Sahə adı: FaceImage)
+        baos.write(("\r\n--" + boundary + "\r\n"
+                + "Content-Disposition: form-data; name=\"FaceImage\"; filename=\"face.jpg\"\r\n"
+                + "Content-Type: image/jpeg\r\n\r\n").getBytes(StandardCharsets.UTF_8));
+        baos.write(imageBytes);
+
+        baos.write(("\r\n--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
+
+        // Network tabında gördüyünüz URL
+        HttpResponse<String> resp = clientFor(device)
+                .putBytes("/ISAPI/Intelligent/FDLib/FDSetUp?format=json",
+                        "multipart/form-data; boundary=" + boundary, baos.toByteArray());
+
+        return toUserOperationResult(resp);
+    }
     // -----------------------------------------------------------------------
     // Legacy user management (generic devices)
     // -----------------------------------------------------------------------
