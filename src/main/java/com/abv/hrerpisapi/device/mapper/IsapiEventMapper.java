@@ -48,7 +48,8 @@ public class IsapiEventMapper {
         int minor = ace.path("subEventType").asInt(-1);
         String employeeNo = ace.path("employeeNoString").asText("");
         String cardNo = ace.path("cardNo").asText("");
+        String picturePath = ParsedAcsEvent.toPicturePath(ace.path("pictureURL").asText(null));
 
-        return new ParsedAcsEvent(serialNo, time, major, minor, employeeNo, cardNo, json);
+        return new ParsedAcsEvent(serialNo, time, major, minor, employeeNo, cardNo, picturePath, json);
     }
 }

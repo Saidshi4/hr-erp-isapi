@@ -500,8 +500,9 @@ public class IsapiClient {
         int minor = node.path("minor").asInt(node.path("subEventType").asInt(-1));
         String employeeNo = node.path("employeeNoString").asText("");
         String cardNo = node.path("cardNo").asText("");
+        String picturePath = ParsedAcsEvent.toPicturePath(node.path("pictureURL").asText(null));
 
-        return new ParsedAcsEvent(serialNo, time, major, minor, employeeNo, cardNo, node.toString());
+        return new ParsedAcsEvent(serialNo, time, major, minor, employeeNo, cardNo, picturePath, node.toString());
     }
 
     private boolean isAcsEventHistoryNotSupported(int statusCode, String responseBody) {
