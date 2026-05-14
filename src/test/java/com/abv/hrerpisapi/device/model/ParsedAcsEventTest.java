@@ -24,6 +24,15 @@ class ParsedAcsEventTest {
     }
 
     @Test
+    void shouldKeepQueryAndFragmentAfterRemovingHost() {
+        String pictureUrl = "http://192.168.0.200:8080/LOCALS/pic/x.jpeg@WEB1?token=abc#v1";
+
+        String picturePath = ParsedAcsEvent.toPicturePath(pictureUrl);
+
+        assertEquals("/LOCALS/pic/x.jpeg@WEB1?token=abc#v1", picturePath);
+    }
+
+    @Test
     void shouldReturnNullForMissingPictureUrl() {
         assertNull(ParsedAcsEvent.toPicturePath(null));
         assertNull(ParsedAcsEvent.toPicturePath(" "));

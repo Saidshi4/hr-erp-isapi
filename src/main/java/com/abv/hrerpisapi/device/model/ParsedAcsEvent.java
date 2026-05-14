@@ -31,13 +31,17 @@ public record ParsedAcsEvent(
             if (uri.getScheme() != null && uri.getRawAuthority() != null) {
                 String path = uri.getRawPath();
                 if (path == null || path.isBlank()) return null;
-                return path;
+                String query = uri.getRawQuery();
+                String fragment = uri.getRawFragment();
+                return path
+                        + (query != null ? "?" + query : "")
+                        + (fragment != null ? "#" + fragment : "");
             }
         } catch (IllegalArgumentException ignored) {
             // Fallback below
         }
 
-        String stripped = candidate.replaceFirst("^(?i)https?://[^/]+", "");
+        String stripped = candidate.replaceFirst("^(?i)[a-z][a-z0-9+.-]*://[^/]+", "");
         return stripped.isBlank() ? null : stripped;
     }
 }
