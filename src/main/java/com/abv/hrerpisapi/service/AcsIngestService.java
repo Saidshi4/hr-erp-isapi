@@ -54,6 +54,7 @@ public class AcsIngestService {
         raw.setSubEventType(event.subEventType());
         raw.setEmployeeNoString(event.employeeNoString());
         raw.setCardNo(event.cardNo());
+        raw.setPicturePath(event.picturePath());
         raw.setRawJson(event.rawJson());
         rawEventRepo.save(raw);
 

@@ -46,6 +46,10 @@ public class AcsRawEventEntity {
     @Column(name = "card_no")
     private String cardNo;
 
+    /** pictureURL host hissəsi çıxarıldıqdan sonra qalan path (one event → one image). */
+    @Column(name = "picture_path")
+    private String picturePath;
+
     @Column(name = "raw_json", columnDefinition = "TEXT")
     private String rawJson;
 
